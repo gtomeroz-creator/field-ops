@@ -177,35 +177,32 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 <body>
 <div id="app"></div>
 <div id="toast" hidden><div></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
-/* ================= ניהול אנשי שטח — הרי נצרת מפעלי מים וביוב ================= */
+/* ================= ניהול אנשי שטח — גרסת ענן (Supabase) ================= */
 'use strict';
 
-/* ---------- אחסון בטוח (localStorage עם נפילה לזיכרון) ---------- */
-const mem = {};
-const store = {
-  get(k){ try{ return localStorage.getItem(k); }catch(e){ return mem[k] ?? null; } },
+/* ---------- חיבור לשרת ---------- */
+const SB_URL='https://dtlksnvhxfkcomxpphew.supabase.co';
+const SB_KEY='sb_publishable_hoNtHB6Zq1hmlBztLNMwQg_fpjPf8EV';
+const sb = window.supabase.createClient(SB_URL, SB_KEY);
+
+/* ---------- אחסון מקומי בטוח (מטמון לקריאה במצב לא מקוון) ---------- */
+const mem={};
+const store={
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return mem[k]??null; } },
   set(k,v){ try{ localStorage.setItem(k,v); }catch(e){ mem[k]=v; } },
   del(k){ try{ localStorage.removeItem(k); }catch(e){ delete mem[k]; } }
 };
-const DB_KEY='hari_field_v1';
+const CACHE_KEY='hari_cloud_cache_v1';
 
-function loadDB(){
-  try{ const raw=store.get(DB_KEY); if(raw) return JSON.parse(raw); }catch(e){}
-  return null;
-}
-function saveDB(){ store.set(DB_KEY, JSON.stringify(DB)); }
+/* ---------- מצב גלובלי ---------- */
+let DB={users:[],tickets:[]};   /* תמונת מצב מקומית של נתוני הענן */
+let ME=null;                    /* הפרופיל של המשתמש המחובר */
+let OFFLINE=false;
+let RECOVERY=false;             /* חזרה מקישור איפוס סיסמה */
 
-/* ---------- סכימה ראשונית + משתמש מנהל-על ---------- */
-let DB = loadDB() || {
-  users:[{
-    id:'u_super', name:'תומר עוז', email:'tomer@hari-nazareth.org.il', phone:'',
-    role:'super', pass:'Tomer1234', createdAt:Date.now(), device:null
-  }],
-  tickets:[], counters:{}, resets:{}
-};
-
-/* ---------- קבועים ---------- */
+/* ---------- קבועים (זהים לגרסה הקודמת) ---------- */
 const CITIES=['נצרת','ריינה','יפיע','איכסל','עילוט'];
 const ROLES={super:'מנהל על', manager:'מנהלן', field:'איש שטח'};
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
@@ -214,24 +211,13 @@ const TYPES={
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
   G:['אי החזרת המצב לקדמותו']
 };
-/* טבלת SLA — שעות יעד לפי סוג פניה (מנהל יכול לשנות בדף הפניה) */
-const SLA={
-  'נזילה / פיצוץ מים':4,'גלישת ביוב':4,'הפסקת מים':4,
-  'תלונה על איכות מים':24,'שבר בשוחה / במכסה שוחה':24,
-  'תלונה על ריח':48,'החלפת מונה שבור':48,
-  'התקנת מונה':72,'החלפת מונה':72,'אחר':72,
-  'אי החזרת המצב לקדמותו':96,
-  'התקנת חיבור חדש למגרש':168,'בקשה להכנת חיבור מגרש':168
-};
 const STATUSES={open:'פתוחה',progress:'בטיפול',done:'הושלמה'};
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',done:'chip-done'};
 
 /* ---------- עזרים ---------- */
 const $=s=>document.querySelector(s);
-const uid=()=>'u_'+Math.random().toString(36).slice(2,10);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDT=t=>t?new Date(t).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
-const fmtD=t=>t?new Date(t).toLocaleDateString('he-IL'):'—';
 function fmtDur(ms){
   if(ms<0) ms=0;
   const m=Math.floor(ms/60000), d=Math.floor(m/1440), h=Math.floor((m%1440)/60), mm=m%60;
@@ -241,42 +227,81 @@ function fmtDur(ms){
 }
 function toast(msg){
   const t=$('#toast'); t.firstElementChild.textContent=msg; t.hidden=false;
-  clearTimeout(t._h); t._h=setTimeout(()=>t.hidden=true,2600);
+  clearTimeout(t._h); t._h=setTimeout(()=>t.hidden=true,3200);
+}
+function errToast(e,fallback){
+  const m=(e&&e.message)||'';
+  if(/תמונת "אחרי"/.test(m)){ toast('⚠️ לא ניתן לסמן "הושלמה" ללא תמונת "אחרי"'); return; }
+  if(/Failed to fetch|NetworkError|network/i.test(m)){ toast('אין תקשורת לשרת — נסו שוב כשחוזרת קליטה'); return; }
+  toast(fallback||('שגיאה: '+m));
 }
 const userById=id=>DB.users.find(u=>u.id===id);
 const userName=id=>userById(id)?.name||'—';
-
-/* ---------- מספור פניות אוטומטי: W/S/G + שנה(2) + חודש(2) + 4 ספרות רץ ---------- */
-function nextTicketNumber(domain){
-  const d=new Date(), yy=String(d.getFullYear()).slice(2), mm=String(d.getMonth()+1).padStart(2,'0');
-  const key=domain+yy+mm;
-  DB.counters[key]=(DB.counters[key]||0)+1;
-  return key+String(DB.counters[key]).padStart(4,'0');
-}
-
-/* ---------- סשן ---------- */
-const SES_KEY='hari_field_session';
-function currentUser(){
-  const id=store.get(SES_KEY);
-  return id?userById(id):null;
-}
-function login(u){ store.set(SES_KEY,u.id); route('home'); }
-function logout(){ store.del(SES_KEY); route('landing'); }
+const currentUser=()=>ME;
 
 /* ---------- סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים ---------- */
-function passChecks(p){
-  return { len:p.length>=8, eng:/[A-Za-z]/.test(p), num:/[0-9]/.test(p) };
-}
+function passChecks(p){ return { len:p.length>=8, eng:/[A-Za-z]/.test(p), num:/[0-9]/.test(p) }; }
 const passOK=p=>{const c=passChecks(p);return c.len&&c.eng&&c.num;};
+
+/* ================= טעינת נתונים מהענן ================= */
+async function loadAll(){
+  try{
+    const [pr,tk,hi,ph]=await Promise.all([
+      sb.from('profiles').select('*').order('name'),
+      sb.from('tickets').select('*').order('created_at',{ascending:false}),
+      sb.from('ticket_history').select('*').order('at'),
+      sb.from('ticket_photos').select('*').order('created_at')
+    ]);
+    if(pr.error||tk.error||hi.error||ph.error) throw (pr.error||tk.error||hi.error||ph.error);
+
+    /* קישורים חתומים לתמונות (התוקף שעה; נטען מחדש בכל רענון) */
+    const paths=ph.data.map(p=>p.path);
+    let urlMap={};
+    if(paths.length){
+      const {data:signed}=await sb.storage.from('ticket-photos').createSignedUrls(paths,3600);
+      (signed||[]).forEach(s=>{ if(s.signedUrl) urlMap[s.path]=s.signedUrl; });
+    }
+
+    const histBy={}, photosBy={};
+    hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
+    ph.data.forEach(p=>{ (photosBy[p.ticket_id]??={before:[],after:[]})[p.kind].push({id:p.id,path:p.path,url:urlMap[p.path]||''}); });
+
+    DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active}));
+    DB.tickets=tk.data.map(t=>({
+      id:t.id, number:t.number, domain:t.domain, type:t.type, city:t.city, address:t.address||'',
+      customerName:t.customer_name||'', customerId:t.customer_id||'', customerPhone:t.customer_phone||'',
+      description:t.description||'', status:t.status,
+      createdAt:+new Date(t.created_at), createdBy:t.created_by, assignedTo:t.assigned_to,
+      slaHours:+t.sla_hours, dueAt:+new Date(t.due_at),
+      firstResponseAt:t.first_response_at?+new Date(t.first_response_at):null,
+      responseResetAt:t.response_reset_at?+new Date(t.response_reset_at):null,
+      workLog:t.work_log||'',
+      gps:t.gps_lat!=null?{lat:t.gps_lat,lng:t.gps_lng,at:t.gps_at?+new Date(t.gps_at):null}:null,
+      completedAt:t.completed_at?+new Date(t.completed_at):null,
+      foundByField:t.found_by_field,
+      outage:t.outage_hours?{area:t.outage_area||'',durationHours:+t.outage_hours}:null,
+      history:histBy[t.id]||[],
+      photosBefore:(photosBy[t.id]||{}).before||[],
+      photosAfter:(photosBy[t.id]||{}).after||[]
+    }));
+    OFFLINE=false;
+    store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
+  }catch(e){
+    /* מצב לא מקוון: מציגים את הנתונים האחרונים שנשמרו במכשיר */
+    const c=store.get(CACHE_KEY);
+    if(c){ try{ const j=JSON.parse(c); DB.users=j.users; DB.tickets=j.tickets; }catch(_){} }
+    OFFLINE=true;
+  }
+}
+async function refresh(){ await loadAll(); render(); }
 
 /* ================= ניתוב ================= */
 let VIEW={name:'landing',arg:null};
 function route(name,arg){ VIEW={name,arg}; render(); window.scrollTo(0,0); }
 
 function render(){
-  const u=currentUser();
-  if(!u && !['landing','login','register','forgot','reset'].includes(VIEW.name)) VIEW={name:'landing'};
-  if(u && ['landing','login','register','forgot','reset'].includes(VIEW.name)) VIEW={name:'home'};
+  if(!ME && !['landing','login','register','forgot','reset'].includes(VIEW.name)) VIEW={name:'landing'};
+  if(ME && ['landing','login','register','forgot'].includes(VIEW.name)) VIEW={name:'home'};
   const app=$('#app');
   switch(VIEW.name){
     case 'landing': app.innerHTML=vLanding(); break;
@@ -284,7 +309,7 @@ function render(){
     case 'register': app.innerHTML=vRegister(); break;
     case 'forgot': app.innerHTML=vForgot(); break;
     case 'reset': app.innerHTML=vReset(); break;
-    default: app.innerHTML=vShell(u); renderInner(u);
+    default: app.innerHTML=vShell(ME); renderInner(ME);
   }
   bindPwEyes();
 }
@@ -310,7 +335,7 @@ function vLanding(){
   </div>`;
 }
 
-/* ================= התחברות ================= */
+/* ================= רכיבי סיסמה ================= */
 function pwField(id,label='סיסמה',auto='current-password'){
   return `<div class="field"><label class="req" for="${id}">${label}</label>
     <div class="pw-wrap">
@@ -334,13 +359,14 @@ function bindPwEyes(){
   });
 }
 
+/* ================= התחברות (הסשן נשמר במכשיר — אין צורך בסיסמה בכל כניסה) ================= */
 function vLogin(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
     <h1>התחברות למערכת</h1><div class="sub">ניהול אנשי שטח — הרי נצרת מים וביוב</div>
     <div id="msg"></div>
     <div class="field"><label class="req" for="lg_email">דוא"ל</label><input type="email" id="lg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
     ${pwField('lg_pass')}
-    <button class="btn btn-primary btn-block" onclick="doLogin()">כניסה</button>
+    <button class="btn btn-primary btn-block" id="lg_btn" onclick="doLogin()">כניסה</button>
     <div style="display:flex;justify-content:space-between;margin-top:14px">
       <a class="link" href="javascript:route('forgot')">שכחתי סיסמה</a>
       <a class="link" href="javascript:route('register')">אין לך חשבון? הרשמה</a>
@@ -348,12 +374,19 @@ function vLogin(){
     <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('landing')">→ חזרה לדף הבית</a></div>
   </div></div></div>`;
 }
-function doLogin(){
-  const email=$('#lg_email').value.trim().toLowerCase(), pass=$('#lg_pass').value;
-  const u=DB.users.find(x=>x.email.toLowerCase()===email);
-  if(!u||u.pass!==pass){ $('#msg').innerHTML='<div class="alert alert-err">דוא"ל או סיסמה שגויים.</div>'; return; }
-  /* המערכת זוכרת את המשתמש במכשיר זה — לא תידרש סיסמה בכניסות הבאות */
-  login(u); toast('שלום '+u.name+' 👋');
+async function doLogin(){
+  const email=$('#lg_email').value.trim().toLowerCase(), pass=$('#lg_pass').value, btn=$('#lg_btn');
+  btn.disabled=true; btn.textContent='מתחבר…';
+  const {error}=await sb.auth.signInWithPassword({email,password:pass});
+  if(error){
+    btn.disabled=false; btn.textContent='כניסה';
+    const m=/Invalid login credentials/i.test(error.message)?'דוא"ל או סיסמה שגויים.'
+          :/Email not confirmed/i.test(error.message)?'החשבון טרם אושר — יש ללחוץ על הקישור שנשלח לדוא"ל.'
+          :error.message;
+    $('#msg').innerHTML=`<div class="alert alert-err">${esc(m)}</div>`;
+    return;
+  }
+  await afterAuth(); toast('שלום '+(ME?.name||'')+' 👋');
 }
 
 /* ================= הרשמה — משתמש חדש מוגדר כאיש שטח ================= */
@@ -365,63 +398,82 @@ function vRegister(){
     <div class="field"><label class="req" for="rg_email">דוא"ל</label><input type="email" id="rg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
     <div class="field"><label for="rg_phone">טלפון</label><input type="tel" id="rg_phone" dir="ltr" style="text-align:left" autocomplete="tel"></div>
     ${pwField('rg_pass','סיסמה','new-password')}
-    <button class="btn btn-primary btn-block" onclick="doRegister()">הרשמה</button>
+    <button class="btn btn-primary btn-block" id="rg_btn" onclick="doRegister()">הרשמה</button>
     <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('login')">יש לך חשבון? התחברות</a></div>
   </div></div></div>`;
 }
-function doRegister(){
+async function doRegister(){
   const name=$('#rg_name').value.trim(), email=$('#rg_email').value.trim().toLowerCase(),
-        phone=$('#rg_phone').value.trim(), pass=$('#rg_pass').value, m=$('#msg');
+        phone=$('#rg_phone').value.trim(), pass=$('#rg_pass').value, m=$('#msg'), btn=$('#rg_btn');
   if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ m.innerHTML='<div class="alert alert-err">כתובת דוא"ל לא תקינה.</div>'; return; }
-  if(DB.users.some(u=>u.email.toLowerCase()===email)){ m.innerHTML='<div class="alert alert-err">דוא"ל זה כבר רשום במערכת.</div>'; return; }
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים.</div>'; return; }
-  const u={id:uid(),name,email,phone,role:'field',pass,createdAt:Date.now()};
-  DB.users.push(u); saveDB(); login(u); toast('נרשמת בהצלחה — הוגדרת כאיש שטח');
+  btn.disabled=true; btn.textContent='נרשם…';
+  const {data,error}=await sb.auth.signUp({email,password:pass,options:{data:{name,phone}}});
+  btn.disabled=false; btn.textContent='הרשמה';
+  if(error){
+    const t=/already registered/i.test(error.message)?'דוא"ל זה כבר רשום במערכת.':error.message;
+    m.innerHTML=`<div class="alert alert-err">${esc(t)}</div>`; return;
+  }
+  if(!data.session){
+    m.innerHTML='<div class="alert alert-ok">נשלח מייל אישור לכתובת שהזנת — יש ללחוץ על הקישור ואז להתחבר.</div>';
+    return;
+  }
+  /* עדכון טלפון בפרופיל (נוצר ע"י טריגר בשרת) */
+  if(phone){ for(let i=0;i<5;i++){ const {error:e}=await sb.from('profiles').update({phone}).eq('id',data.session.user.id); if(!e) break; await new Promise(r=>setTimeout(r,600)); } }
+  await afterAuth(); toast('נרשמת בהצלחה — הוגדרת כאיש שטח');
 }
 
-/* ================= שחזור סיסמה ================= */
+/* ================= שחזור סיסמה — מייל איפוס אמיתי ================= */
 function vForgot(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
-    <h1>שחזור סיסמה</h1><div class="sub">נזין את הדוא"ל וקוד איפוס יונפק לבחירת סיסמה חדשה.</div>
+    <h1>שחזור סיסמה</h1><div class="sub">נשלח קישור איפוס לכתובת הדוא"ל שלך. הקישור יחזיר אותך לכאן לבחירת סיסמה חדשה.</div>
     <div id="msg"></div>
     <div class="field"><label class="req" for="fg_email">דוא"ל</label><input type="email" id="fg_email" dir="ltr" style="text-align:left"></div>
-    <button class="btn btn-primary btn-block" onclick="doForgot()">שליחת קוד איפוס</button>
+    <button class="btn btn-primary btn-block" onclick="doForgot()">שליחת קישור איפוס</button>
     <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('login')">→ חזרה להתחברות</a></div>
   </div></div></div>`;
 }
-function doForgot(){
+async function doForgot(){
   const email=$('#fg_email').value.trim().toLowerCase();
-  const u=DB.users.find(x=>x.email.toLowerCase()===email);
-  if(!u){ $('#msg').innerHTML='<div class="alert alert-err">דוא"ל זה אינו רשום במערכת.</div>'; return; }
-  const code=String(Math.floor(100000+Math.random()*900000));
-  DB.resets[email]={code,at:Date.now()}; saveDB();
-  /* בגרסת ההדגמה הקוד מוצג על המסך; בסביבת ייצור הקוד יישלח לדוא"ל דרך שרת */
-  $('#msg').innerHTML=`<div class="alert alert-info">קוד האיפוס שלך (בהדגמה מוצג כאן, בייצור יישלח לדוא"ל): <b dir="ltr">${code}</b></div>`;
-  setTimeout(()=>route('reset',email),2500);
+  if(!email){ $('#msg').innerHTML='<div class="alert alert-err">יש להזין דוא"ל.</div>'; return; }
+  const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
+  $('#msg').innerHTML=error
+    ?`<div class="alert alert-err">${esc(error.message)}</div>`
+    :'<div class="alert alert-ok">אם הכתובת רשומה במערכת — נשלח אליה קישור איפוס. בדקו גם בתיקיית הספאם.</div>';
 }
 function vReset(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
-    <h1>בחירת סיסמה חדשה</h1><div class="sub">הזינו את קוד האיפוס שקיבלתם וסיסמה חדשה.</div>
+    <h1>בחירת סיסמה חדשה</h1><div class="sub">הגעת מקישור האיפוס — בחרו סיסמה חדשה לחשבון.</div>
     <div id="msg"></div>
-    <div class="field"><label class="req" for="rs_email">דוא"ל</label><input type="email" id="rs_email" dir="ltr" style="text-align:left" value="${esc(VIEW.arg||'')}"></div>
-    <div class="field"><label class="req" for="rs_code">קוד איפוס</label><input id="rs_code" dir="ltr" style="text-align:left" inputmode="numeric"></div>
     ${pwField('rs_pass','סיסמה חדשה','new-password')}
-    <button class="btn btn-primary btn-block" onclick="doReset()">עדכון סיסמה</button>
-    <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('login')">→ חזרה להתחברות</a></div>
+    <button class="btn btn-primary btn-block" onclick="doReset()">עדכון סיסמה וכניסה</button>
   </div></div></div>`;
 }
-function doReset(){
-  const email=$('#rs_email').value.trim().toLowerCase(), code=$('#rs_code').value.trim(), pass=$('#rs_pass').value, m=$('#msg');
-  const r=DB.resets[email];
-  if(!r||r.code!==code){ m.innerHTML='<div class="alert alert-err">קוד האיפוס שגוי.</div>'; return; }
+async function doReset(){
+  const pass=$('#rs_pass').value, m=$('#msg');
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, אותיות באנגלית ומספרים.</div>'; return; }
-  const u=DB.users.find(x=>x.email.toLowerCase()===email);
-  u.pass=pass; delete DB.resets[email]; saveDB();
-  toast('הסיסמה עודכנה בהצלחה'); route('login');
+  const {error}=await sb.auth.updateUser({password:pass});
+  if(error){ m.innerHTML=`<div class="alert alert-err">${esc(error.message)}</div>`; return; }
+  RECOVERY=false; await afterAuth(); toast('הסיסמה עודכנה בהצלחה');
 }
 
-/* ================= מעטפת האפליקציה ================= */
+/* ================= אחרי אימות: טעינת פרופיל ונתונים ================= */
+async function afterAuth(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){ ME=null; route('landing'); return; }
+  /* הפרופיל נוצר ע"י טריגר — ננסה כמה פעמים אם עוד לא הספיק */
+  for(let i=0;i<6;i++){
+    const {data}=await sb.from('profiles').select('*').eq('id',session.user.id).maybeSingle();
+    if(data){ ME={id:data.id,name:data.name,email:data.email,phone:data.phone||'',role:data.role}; break; }
+    await new Promise(r=>setTimeout(r,700));
+  }
+  if(!ME){ toast('שגיאה בטעינת הפרופיל — נסו לרענן'); return; }
+  await loadAll();
+  route('home');
+}
+async function logout(){ await sb.auth.signOut(); ME=null; route('landing'); }
+
+/* ================= מעטפת ================= */
 function vShell(u){
   const tabs=[['home','🏠 ראשי'],['tickets','📋 פניות']];
   if(u.role!=='field') tabs.push(['newTicket','➕ פניה חדשה']);
@@ -432,9 +484,11 @@ function vShell(u){
   <div class="topbar"><div class="wrap">
     <div class="brand"><div class="logo">💧</div><div>ניהול אנשי שטח<div style="font-size:11px;font-weight:400;opacity:.8">הרי נצרת מים וביוב</div></div></div>
     <div class="spacer"></div>
+    <button onclick="refresh().then(()=>toast('הנתונים עודכנו'))" title="רענון נתונים" style="font-size:17px;padding:7px">🔄</button>
     <div class="who">${esc(u.name)}<br><span style="opacity:.75">${ROLES[u.role]}</span></div>
     <button onclick="logout()" title="התנתקות מהמערכת" style="display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.35);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600">⎋ התנתקות</button>
   </div></div>
+  ${OFFLINE?'<div style="background:var(--warning-bg);color:var(--warning);text-align:center;padding:7px;font-size:13px;font-weight:600">📡 מצב לא מקוון — מוצגים הנתונים האחרונים שנשמרו במכשיר. עדכונים יידרשו חיבור לרשת.</div>':''}
   <div class="nav"><div class="wrap">
     ${tabs.map(([k,l])=>`<button class="${VIEW.name===k||(k==='tickets'&&VIEW.name==='ticket')?'on':''}" onclick="route('${k}')">${l}</button>`).join('')}
   </div></div>
@@ -456,7 +510,7 @@ function renderInner(u){
   }
 }
 
-/* ---------- לוגיקת פניות ---------- */
+/* ---------- לוגיקה משותפת ---------- */
 function myTickets(u){ return DB.tickets.filter(t=>t.assignedTo===u.id); }
 function isToday(t){ const d=new Date(t),n=new Date(); return d.toDateString()===n.toDateString(); }
 function ticketById(id){ return DB.tickets.find(t=>t.id===id); }
@@ -465,50 +519,24 @@ function slaState(t){
   if(t.status==='done') return t.completedAt<=t.dueAt?'ok':'late';
   return Date.now()<=t.dueAt?'ok':'late';
 }
+async function addHistory(ticketId,action,note){
+  await sb.from('ticket_history').insert({ticket_id:ticketId,by_user:ME.id,action,note:note||''});
+}
 
-function createTicket(u,data){
-  const number=nextTicketNumber(data.domain);
-  const sla=data.slaHours ?? (SLA[data.type]||72);
-  const now=Date.now();
-  const t={
-    id:'t_'+Math.random().toString(36).slice(2,10), number,
+/* ---------- יצירת פניה בענן (המספור וה-SLA נקבעים ע"י טריגרים בשרת) ---------- */
+async function createTicketCloud(data){
+  const row={
     domain:data.domain, type:data.type, city:data.city, address:data.address||'',
-    customerName:data.customerName||'', customerId:data.customerId||'', customerPhone:data.customerPhone||'',
-    description:data.description||'', status:'open',
-    createdAt:now, createdBy:u.id, assignedTo:data.assignedTo,
-    slaHours:sla, dueAt:now+sla*3600000,
-    firstResponseAt:null, responseResetAt:null,
-    history:[{at:now,by:u.id,action:'פתיחת פניה',note:'שויכה ל'+userName(data.assignedTo)}],
-    photosBefore:[], photosAfter:[], workLog:'', gps:null, completedAt:null,
-    foundByField:!!data.foundByField, outage:data.outage||null
+    customer_name:data.customerName||'', customer_id:data.customerId||'', customer_phone:data.customerPhone||'',
+    description:data.description||'', created_by:ME.id, assigned_to:data.assignedTo,
+    found_by_field:!!data.foundByField
   };
-  DB.tickets.unshift(t); saveDB();
+  if(data.slaHours) row.sla_hours=data.slaHours;
+  if(data.outage){ row.outage_area=data.outage.area; row.outage_hours=data.outage.durationHours; }
+  if(data.gps){ row.gps_lat=data.gps.lat; row.gps_lng=data.gps.lng; row.gps_at=new Date(data.gps.at).toISOString(); }
+  const {data:t,error}=await sb.from('tickets').insert(row).select().single();
+  if(error) throw error;
   return t;
-}
-function addHistory(t,u,action,note){ t.history.push({at:Date.now(),by:u.id,action,note:note||''}); }
-
-function setStatus(id,status){
-  const u=currentUser(), t=ticketById(id);
-  if(!canEdit(u,t)){ toast('רק הגורם המטפל יכול לעדכן פניה זו'); return; }
-  if(status==='done' && t.photosAfter.length===0){ toast('⚠️ לא ניתן לסמן "הושלמה" ללא תמונת "אחרי"'); return; }
-  if(t.status==='open' && status!=='open' && !t.firstResponseAt) t.firstResponseAt=Date.now();
-  t.status=status;
-  if(status==='done'){ t.completedAt=Date.now(); t.workLog=$('#wlog')?.value??t.workLog; }
-  addHistory(t,u,'שינוי סטטוס: '+STATUSES[status]);
-  saveDB(); render(); toast('הסטטוס עודכן: '+STATUSES[status]);
-}
-
-/* אסקלציה — העברת פניה לגורם אחר; המספר נשמר, response_reset_at מתאפס */
-function transferTicket(id,toId){
-  const u=currentUser(), t=ticketById(id), to=userById(toId);
-  if(!canEdit(u,t)){ toast('רק הגורם המטפל יכול להעביר פניה זו'); return; }
-  const from=t.assignedTo;
-  t.assignedTo=toId;
-  t.responseResetAt=Date.now();
-  if(!t.firstResponseAt) t.firstResponseAt=Date.now();
-  if(t.status==='done'){} else t.status='open';
-  addHistory(t,u,'העברת פניה (אסקלציה)','מ'+userName(from)+' אל '+to.name);
-  saveDB(); closeModal(); render(); toast('הפניה הועברה אל '+to.name);
 }
 
 /* ---------- מסך ראשי ---------- */
@@ -543,8 +571,6 @@ function statCard(n,l,color,view,filter){
     <div class="n" style="color:${color}">${n}</div><div class="l">${l}</div>
     <div class="bar" style="background:${color};opacity:.25"></div></div>`;
 }
-
-/* ---------- שורת פניה ---------- */
 function trow(t){
   const d=DOMAINS[t.domain], late=slaState(t)==='late';
   return `<div class="trow" onclick="route('ticket','${t.id}')">
@@ -566,11 +592,10 @@ function trow(t){
   </div>`;
 }
 
-/* ---------- רשימת פניות + סינון ---------- */
+/* ---------- רשימת פניות + סינון וחיפוש ---------- */
 function vTickets(u){
   const f=VIEW.arg;
-  let list=[...DB.tickets];
-  if(u.role==='field') list=list.filter(t=>t.assignedTo===u.id||t.history.some(h=>h.by===u.id));
+  let list=visibleTickets(u);
   if(f==='open') list=list.filter(t=>t.status==='open'&&t.assignedTo===u.id);
   if(f==='progress') list=list.filter(t=>t.status==='progress'&&t.assignedTo===u.id);
   if(f==='moved') list=list.filter(t=>t.status!=='done'&&t.assignedTo!==u.id&&t.history.some(h=>h.by===u.id&&h.action.startsWith('העברת פניה')));
@@ -584,11 +609,15 @@ function vTickets(u){
   </div>
   <div id="tlist">${list.length?list.map(trow).join(''):'<div class="empty"><div class="i">📭</div>לא נמצאו פניות.</div>'}</div>`;
 }
-function applyFilters(){
-  const u=currentUser();
-  const q=$('#f_q').value.trim().toLowerCase(), dm=$('#f_domain').value, st=$('#f_status').value, ct=$('#f_city').value;
+function visibleTickets(u){
   let list=[...DB.tickets];
   if(u.role==='field') list=list.filter(t=>t.assignedTo===u.id||t.history.some(h=>h.by===u.id));
+  return list;
+}
+function applyFilters(){
+  const u=ME;
+  const q=$('#f_q').value.trim().toLowerCase(), dm=$('#f_domain').value, st=$('#f_status').value, ct=$('#f_city').value;
+  let list=visibleTickets(u);
   if(dm) list=list.filter(t=>t.domain===dm);
   if(st) list=list.filter(t=>t.status===st);
   if(ct) list=list.filter(t=>t.city===ct);
@@ -596,15 +625,14 @@ function applyFilters(){
   $('#tlist').innerHTML=list.length?list.map(trow).join(''):'<div class="empty"><div class="i">📭</div>לא נמצאו פניות.</div>';
 }
 
-/* ---------- טופס פתיחת פניה (מנהל על / מנהלן) ---------- */
+/* ---------- טופס פתיחת פניה ----------- */
 function typeOptions(domain,sel){
   return TYPES[domain].map(t=>`<option ${t===sel?'selected':''}>${t}</option>`).join('');
 }
 function vNewTicket(u){
-  const workers=DB.users;
   return `<div class="card" style="max-width:640px;margin:0 auto">
     <div class="section-t">➕ פתיחת פקודת עבודה</div>
-    <div class="alert alert-info">מספר הפניה יוקצה אוטומטית לפי הסיווג: W (מים) / S (ביוב) / G (כללי) + שנה + חודש + מספר רץ.</div>
+    <div class="alert alert-info">מספר הפניה יוקצה אוטומטית בשרת: W (מים) / S (ביוב) / G (כללי) + שנה + חודש + מספר רץ.</div>
     <div class="grid grid-2">
       <div class="field"><label class="req">סיווג על</label>
         <select id="nt_domain" onchange="$('#nt_type').innerHTML=typeOptions(this.value)">
@@ -623,28 +651,32 @@ function vNewTicket(u){
     <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label class="req">שיוך לגורם מטפל</label>
-      <select id="nt_assign">${workers.map(w=>`<option value="${w.id}">${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
+      <select id="nt_assign">${DB.users.map(w=>`<option value="${w.id}" ${w.id===u.id?'selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
       <div class="hint">הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
     <div class="field"><label>זמן יעד (SLA)</label>
-      <input value="נקבע אוטומטית לפי סוג הפניה" disabled>
+      <input value="נקבע אוטומטית בשרת לפי סוג הפניה" disabled>
       <div class="hint">מנהל יכול לשנות את היעד בדף הפניה לאחר הפתיחה. לאיש שטח השדה קריא בלבד.</div></div>
-    <button class="btn btn-primary btn-block" onclick="doNewTicket()">פתיחת פניה</button>
+    <button class="btn btn-primary btn-block" id="nt_btn" onclick="doNewTicket()">פתיחת פניה</button>
   </div>`;
 }
-function doNewTicket(){
-  const u=currentUser();
+async function doNewTicket(){
   const cname=$('#nt_cname').value.trim(), phone=$('#nt_phone').value.trim(), addr=$('#nt_addr').value.trim();
   if(!cname||!phone||!addr){ toast('יש למלא שם לקוח, טלפון וכתובת'); return; }
-  const t=createTicket(u,{
-    domain:$('#nt_domain').value, type:$('#nt_type').value, city:$('#nt_city').value,
-    customerName:cname, customerId:$('#nt_cid').value.trim(), customerPhone:phone,
-    address:addr, description:$('#nt_desc').value.trim(), assignedTo:$('#nt_assign').value
-  });
-  toast('נפתחה פניה '+t.number); route('ticket',t.id);
+  const btn=$('#nt_btn'); btn.disabled=true; btn.textContent='פותח פניה…';
+  try{
+    const t=await createTicketCloud({
+      domain:$('#nt_domain').value, type:$('#nt_type').value, city:$('#nt_city').value,
+      customerName:cname, customerId:$('#nt_cid').value.trim(), customerPhone:phone,
+      address:addr, description:$('#nt_desc').value.trim(), assignedTo:$('#nt_assign').value
+    });
+    await loadAll(); toast('נפתחה פניה '+t.number); route('ticket',t.id);
+  }catch(e){ btn.disabled=false; btn.textContent='פתיחת פניה'; errToast(e); }
 }
 
-/* ---------- "מצאתי תקלה" — דיווח איש שטח, ללא פרטי פונה ---------- */
+/* ---------- "מצאתי תקלה" ---------- */
+let _gpsTmp=null, _ffPhotos=[];
 function openFoundFault(){
+  _ffPhotos=[]; _gpsTmp=null;
   showModal(`<h2>🛠️ מצאתי תקלה <button class="x" onclick="closeModal()">×</button></h2>
     <div class="grid grid-2">
       <div class="field"><label class="req">סיווג</label>
@@ -665,10 +697,16 @@ function openFoundFault(){
         <span id="ff_pcount" class="hint"></span>
       </div>
       <div class="photos" id="ff_pprev" style="margin-top:10px"></div></div>
-    <button class="btn btn-water btn-block" onclick="doFoundFault()">פתיחת פניה ושיוך אליי</button>`);
-  _ffPhotos=[];
+    <button class="btn btn-water btn-block" id="ff_btn" onclick="doFoundFault()">פתיחת פניה ושיוך אליי</button>`);
 }
-let _gpsTmp=null, _ffPhotos=[];
+function grabGPS(pref){
+  if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
+  navigator.geolocation.getCurrentPosition(p=>{
+    _gpsTmp={lat:p.coords.latitude,lng:p.coords.longitude,at:Date.now()};
+    const el=$('#'+pref+'_gps'); if(el) el.textContent=`נ.צ נקלט: ${_gpsTmp.lat.toFixed(5)}, ${_gpsTmp.lng.toFixed(5)}`;
+    toast('המיקום נקלט');
+  },()=>toast('לא ניתן לקבל מיקום — יש לאשר הרשאה'));
+}
 function ffAddPhoto(ev){
   const files=[...ev.target.files]; if(!files.length) return;
   compressImages(files,list=>{
@@ -679,33 +717,24 @@ function ffAddPhoto(ev){
     toast('התמונה צורפה');
   });
 }
-function grabGPS(pref){
-  if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
-  navigator.geolocation.getCurrentPosition(p=>{
-    _gpsTmp={lat:p.coords.latitude,lng:p.coords.longitude,at:Date.now()};
-    const el=$('#'+pref+'_gps'); if(el) el.textContent=`נ.צ נקלט: ${_gpsTmp.lat.toFixed(5)}, ${_gpsTmp.lng.toFixed(5)}`;
-    toast('המיקום נקלט');
-  },()=>toast('לא ניתן לקבל מיקום — יש לאשר הרשאה'));
-}
-function doFoundFault(){
-  const u=currentUser();
-  const t=createTicket(u,{
-    domain:$('#ff_domain').value, type:$('#ff_type').value, city:$('#ff_city').value,
-    address:$('#ff_addr').value.trim(), description:$('#ff_desc').value.trim(),
-    assignedTo:u.id, foundByField:true
-  });
-  if(_gpsTmp){ t.gps=_gpsTmp; _gpsTmp=null; }
-  if(_ffPhotos.length){
-    t.photosBefore.push(..._ffPhotos);
-    addHistory(t,u,'העלאת תמונות לפני',_ffPhotos.length+' תמונות מהדיווח');
-    _ffPhotos=[];
-  }
-  addHistory(t,u,'דיווח מהשטח','נפתחה ע"י איש שטח — "מצאתי תקלה"'); saveDB();
-  closeModal(); toast('נפתחה פניה '+t.number+' ושויכה אליך'); route('ticket',t.id);
+async function doFoundFault(){
+  const btn=$('#ff_btn'); btn.disabled=true; btn.textContent='פותח פניה…';
+  try{
+    const t=await createTicketCloud({
+      domain:$('#ff_domain').value, type:$('#ff_type').value, city:$('#ff_city').value,
+      address:$('#ff_addr').value.trim(), description:$('#ff_desc').value.trim(),
+      assignedTo:ME.id, foundByField:true, gps:_gpsTmp
+    });
+    await addHistory(t.id,'דיווח מהשטח','נפתחה ע"י איש שטח — "מצאתי תקלה"');
+    if(_ffPhotos.length){ await uploadDataUrls(t.id,'before',_ffPhotos); _ffPhotos=[]; }
+    _gpsTmp=null;
+    await loadAll(); closeModal(); toast('נפתחה פניה '+t.number+' ושויכה אליך'); route('ticket',t.id);
+  }catch(e){ btn.disabled=false; btn.textContent='פתיחת פניה ושיוך אליי'; errToast(e); }
 }
 
 /* ---------- דיווח הפסקת מים ---------- */
 function openOutage(){
+  _gpsTmp=null;
   showModal(`<h2>🚱 דיווח הפסקת מים <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-info">הדיווח נשלח לממונה ונשאר פתוח אצלך עד סגירתו. תאריך היעד ייקבע לפי משך הזמן המשוער.</div>
     <div class="field"><label class="req">ישוב / אזור</label><select id="ou_city">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
@@ -713,36 +742,36 @@ function openOutage(){
     <div class="field"><label class="req">משך זמן משוער (שעות)</label><input id="ou_hours" type="number" min="1" value="4" dir="ltr" style="text-align:left"></div>
     <div class="field"><label>תיאור</label><textarea id="ou_desc" rows="2"></textarea></div>
     <div class="field"><button class="btn btn-outline btn-sm" onclick="grabGPS('ou')">📍 צרף מיקום GPS</button> <span id="ou_gps" class="hint"></span></div>
-    <button class="btn btn-danger btn-block" onclick="doOutage()">שליחת דיווח הפסקת מים</button>`);
+    <button class="btn btn-danger btn-block" id="ou_btn" onclick="doOutage()">שליחת דיווח הפסקת מים</button>`);
 }
-function doOutage(){
-  const u=currentUser();
-  const hours=parseFloat($('#ou_hours').value);
-  const area=$('#ou_area').value.trim();
+async function doOutage(){
+  const hours=parseFloat($('#ou_hours').value), area=$('#ou_area').value.trim();
   if(!hours||hours<=0){ toast('יש להזין משך זמן משוער'); return; }
-  const t=createTicket(u,{
-    domain:'W', type:'הפסקת מים', city:$('#ou_city').value,
-    address:area, description:$('#ou_desc').value.trim(),
-    assignedTo:u.id, foundByField:true, slaHours:hours,
-    outage:{area:area||$('#ou_city').value, durationHours:hours}
-  });
-  if(_gpsTmp){ t.gps=_gpsTmp; _gpsTmp=null; }
-  addHistory(t,u,'דיווח הפסקת מים','נשלח לידיעת הממונים · משך משוער: '+hours+' שעות'); saveDB();
-  closeModal(); toast('דיווח הפסקת מים נפתח — '+t.number); route('ticket',t.id);
+  const btn=$('#ou_btn'); btn.disabled=true; btn.textContent='שולח…';
+  try{
+    const t=await createTicketCloud({
+      domain:'W', type:'הפסקת מים', city:$('#ou_city').value,
+      address:area, description:$('#ou_desc').value.trim(),
+      assignedTo:ME.id, foundByField:true, slaHours:hours,
+      outage:{area:area||$('#ou_city').value, durationHours:hours}, gps:_gpsTmp
+    });
+    _gpsTmp=null;
+    await addHistory(t.id,'דיווח הפסקת מים','נשלח לידיעת הממונים · משך משוער: '+hours+' שעות');
+    await loadAll(); closeModal(); toast('דיווח הפסקת מים נפתח — '+t.number); route('ticket',t.id);
+  }catch(e){ btn.disabled=false; btn.textContent='שליחת דיווח הפסקת מים'; errToast(e); }
 }
 
-/* ---------- מודאל כללי ---------- */
 function showModal(html){
   $('#modal-root').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
   bindPwEyes();
 }
 function closeModal(){ $('#modal-root').innerHTML=''; }
 
-/* ---------- כרטיס פקודת עבודה מלא ---------- */
+/* ---------- כרטיס פקודת עבודה ---------- */
 function vTicket(u,id){
   const t=ticketById(id);
   if(!t) return '<div class="empty">הפניה לא נמצאה.</div>';
-  const d=DOMAINS[t.domain], editable=canEdit(u,t), mgr=u.role!=='field';
+  const d=DOMAINS[t.domain], editable=canEdit(u,t)&&!OFFLINE, mgr=u.role!=='field';
   const late=slaState(t)==='late';
   const handleMs=(t.status==='done'?t.completedAt:Date.now())-t.createdAt;
   return `
@@ -761,7 +790,7 @@ function vTicket(u,id){
     <div class="grid grid-2">
       <div>
         <dl class="kv">
-          ${t.customerName?`<dt>לקוח</dt><dd>${esc(t.customerName)}${t.customerId?' · ת.ז ' + esc(t.customerId):''}</dd>`:''}
+          ${t.customerName?`<dt>לקוח</dt><dd>${esc(t.customerName)}${t.customerId?' · ת.ז '+esc(t.customerId):''}</dd>`:''}
           ${t.customerPhone?`<dt>טלפון</dt><dd dir="ltr" style="text-align:right">${esc(t.customerPhone)}</dd>`:''}
           <dt>ישוב</dt><dd>${esc(t.city)}</dd>
           ${t.address?`<dt>כתובת</dt><dd>${esc(t.address)}</dd>`:''}
@@ -778,7 +807,7 @@ function vTicket(u,id){
           <div style="font-size:12.5px;font-weight:600;color:var(--text-2)">זמן טיפול ${t.status==='done'?'(סופי)':'(מתעדכן חי)'}</div>
           <div class="timer-big ${late?'sla-late':'sla-ok'}" data-live-big="${t.id}">${fmtDur(handleMs)}</div>
           <div class="hint">🎯 יעד טיפול: ${fmtDT(t.dueAt)} (SLA ${t.slaHours} שעות)</div>
-          ${mgr&&t.status!=='done'?`
+          ${mgr&&editable&&t.status!=='done'?`
           <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
             <input id="sla_h" type="number" min="1" value="${t.slaHours}" dir="ltr" style="text-align:left;width:90px;padding:7px">
             <button class="btn btn-outline btn-sm" onclick="changeSLA('${t.id}')">עדכון יעד (מנהל)</button>
@@ -797,38 +826,73 @@ function vTicket(u,id){
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       <button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>
     </div>
-    <div class="hint" style="margin-top:8px">סגירת פניה מחייבת תמונת "אחרי". לאחר העברה — רק הגורם החדש יוכל לעדכן.</div>
+    <div class="hint" style="margin-top:8px">סגירת פניה מחייבת תמונת "אחרי" (נאכף גם בשרת). לאחר העברה — רק הגורם החדש יוכל לעדכן.</div>
     <div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
       <textarea id="wlog" rows="3" onchange="saveWorkLog('${t.id}')">${esc(t.workLog)}</textarea></div>
   </div>`:''}
-  ${!editable&&t.status!=='done'?'<div class="alert alert-info">פניה זו בטיפול גורם אחר — הצפייה לקריאה בלבד.</div>':''}
+  ${!canEdit(u,t)&&t.status!=='done'?'<div class="alert alert-info">פניה זו בטיפול גורם אחר — הצפייה לקריאה בלבד.</div>':''}
+  ${OFFLINE&&t.status!=='done'?'<div class="alert alert-err">📡 מצב לא מקוון — עדכונים יתאפשרו כשתחזור התקשורת.</div>':''}
   ${t.status==='done'&&t.workLog?`<div class="card" style="margin-bottom:14px"><div class="section-t">📝 פעולות שבוצעו</div><div style="font-size:14px">${esc(t.workLog)}</div></div>`:''}
 
   <div class="grid grid-2" style="margin-bottom:14px">
     <div class="card">
       <div class="section-t">📷 תמונות לפני (${t.photosBefore.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
-      ${editable&&t.status!=='done'?photoButtons(t.id,'photosBefore'):''}
+      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
+      ${editable&&t.status!=='done'?photoButtons(t.id,'before'):''}
     </div>
     <div class="card">
       <div class="section-t">📷 תמונות אחרי (${t.photosAfter.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||'<div class="hint">אין תמונות — חובה לסגירה</div>'}</div>
-      ${editable&&t.status!=='done'?photoButtons(t.id,'photosAfter'):''}
+      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||'<div class="hint">אין תמונות — חובה לסגירה</div>'}</div>
+      ${editable&&t.status!=='done'?photoButtons(t.id,'after'):''}
     </div>
   </div>
 
   <div class="grid grid-2">
     <div class="card">
       <div class="section-t">📍 מיקום ביצוע</div>
-      ${t.gps?`<div class="hint" style="margin-bottom:8px" dir="ltr">${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)} · ${fmtDT(t.gps.at)}</div><div id="tmap" class="map-box" style="height:220px"></div>`:'<div class="hint">טרם תועד מיקום GPS לפניה זו.</div>'}
+      ${t.gps?`<div class="hint" style="margin-bottom:8px" dir="ltr">${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)}${t.gps.at?' · '+fmtDT(t.gps.at):''}</div><div id="tmap" class="map-box" style="height:220px"></div>`:'<div class="hint">טרם תועד מיקום GPS לפניה זו.</div>'}
     </div>
     <div class="card">
       <div class="section-t">🕓 היסטוריית סטטוסים ופעולות</div>
       <ul class="timeline">
-        ${[...t.history].reverse().map(h=>`<li><b>${esc(h.action)}</b>${h.note?' — '+esc(h.note):''}<div class="t">${fmtDT(h.at)} · ${esc(userName(h.by))}</div></li>`).join('')}
+        ${[...t.history].reverse().map(h=>`<li><b>${esc(h.action)}</b>${h.note?' — '+esc(h.note):''}<div class="t">${fmtDT(h.at)} · ${esc(userName(h.by))}</div></li>`).join('')||'<div class="hint">אין רישומים.</div>'}
       </ul>
     </div>
   </div>`;
+}
+
+/* ---------- תמונות: דחיסה, העלאה ל-Storage, מחיקה ---------- */
+function compressImages(files,done){
+  const out=[]; let left=files.length;
+  if(!left){ done(out); return; }
+  files.forEach(f=>{
+    const img=new Image(), rd=new FileReader();
+    rd.onload=()=>{ img.onload=()=>{
+      const c=document.createElement('canvas'), max=1280;
+      const sc=Math.min(1,max/Math.max(img.width,img.height));
+      c.width=img.width*sc; c.height=img.height*sc;
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      out.push(c.toDataURL('image/jpeg',.75));
+      if(--left===0) done(out);
+    }; img.src=rd.result; };
+    rd.readAsDataURL(f);
+  });
+}
+function dataUrlToBlob(du){
+  const [h,b64]=du.split(','), mime=h.match(/:(.*?);/)[1], bin=atob(b64);
+  const arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type:mime});
+}
+async function uploadDataUrls(ticketId,kind,dataUrls){
+  for(let i=0;i<dataUrls.length;i++){
+    const path=`${ticketId}/${kind}_${Date.now()}_${i}.jpg`;
+    const {error:e1}=await sb.storage.from('ticket-photos').upload(path,dataUrlToBlob(dataUrls[i]),{contentType:'image/jpeg'});
+    if(e1) throw e1;
+    const {error:e2}=await sb.from('ticket_photos').insert({ticket_id:ticketId,kind,path,by_user:ME.id});
+    if(e2) throw e2;
+  }
+  await addHistory(ticketId,'העלאת תמונות '+(kind==='before'?'לפני':'אחרי'),dataUrls.length+' תמונות');
 }
 function photoButtons(id,kind){
   return `<div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -838,58 +902,51 @@ function photoButtons(id,kind){
       <input type="file" accept="image/*" multiple hidden onchange="addPhoto(event,'${id}','${kind}')"></label>
   </div>`;
 }
-function compressImages(files,done){
-  const out=[]; let left=files.length;
-  if(!left){ done(out); return; }
-  files.forEach(f=>{
-    const img=new Image(), rd=new FileReader();
-    rd.onload=()=>{ img.onload=()=>{
-      const c=document.createElement('canvas'), max=1024;
-      const sc=Math.min(1,max/Math.max(img.width,img.height));
-      c.width=img.width*sc; c.height=img.height*sc;
-      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      out.push(c.toDataURL('image/jpeg',.72));
-      if(--left===0) done(out);
-    }; img.src=rd.result; };
-    rd.readAsDataURL(f);
-  });
-}
 function addPhoto(ev,id,kind){
-  const t=ticketById(id), files=[...ev.target.files];
-  if(!files.length) return;
-  compressImages(files,list=>{
-    t[kind].push(...list);
-    addHistory(t,currentUser(),'העלאת תמונות '+(kind==='photosBefore'?'לפני':'אחרי'),list.length+' תמונות');
-    try{ saveDB(); }catch(e){ toast('שים לב: נפח האחסון המקומי מלא'); }
-    render(); toast('התמונות נשמרו');
+  const files=[...ev.target.files]; if(!files.length) return;
+  toast('מעלה תמונות…');
+  compressImages(files,async list=>{
+    try{ await uploadDataUrls(id,kind,list); await loadAll(); render(); toast('התמונות הועלו לענן'); }
+    catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
   });
 }
 function viewPhoto(id,kind,i){
-  const t=ticketById(id);
+  const t=ticketById(id), p=t[kind][i];
+  const storeKind=kind==='photosBefore'?'before':'after';
   showModal(`<h2>תצוגת תמונה <button class="x" onclick="closeModal()">×</button></h2>
-    <img src="${t[kind][i]}" style="width:100%;border-radius:12px">
-    ${canEdit(currentUser(),t)&&t.status!=='done'?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${kind}',${i})">🗑 מחיקת תמונה</button>`:''}`);
+    <img src="${p.url}" style="width:100%;border-radius:12px">
+    ${canEdit(ME,t)&&t.status!=='done'&&!OFFLINE?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${storeKind}',${p.id},'${p.path}')">🗑 מחיקת תמונה</button>`:''}`);
 }
-function delPhoto(id,kind,i){ const t=ticketById(id); t[kind].splice(i,1); saveDB(); closeModal(); render(); }
-function saveWorkLog(id){ const t=ticketById(id); if(!canEdit(currentUser(),t))return; t.workLog=$('#wlog').value; saveDB(); toast('התיאור נשמר'); }
-function changeSLA(id){
-  const u=currentUser(); if(u.role==='field'){toast('רק מנהל יכול לשנות יעד');return;}
-  const t=ticketById(id), h=parseFloat($('#sla_h').value);
-  if(!h||h<=0){toast('ערך לא תקין');return;}
-  t.slaHours=h; t.dueAt=t.createdAt+h*3600000;
-  addHistory(t,u,'עדכון זמן יעד (SLA)',h+' שעות'); saveDB(); render(); toast('היעד עודכן');
+async function delPhoto(id,kind,photoId,path){
+  try{
+    await sb.from('ticket_photos').delete().eq('id',photoId);
+    await sb.storage.from('ticket-photos').remove([path]);
+    await loadAll(); closeModal(); render();
+  }catch(e){ errToast(e); }
 }
-function grabTicketGPS(id){
+
+/* ---------- פעולות על פניה ---------- */
+async function setStatus(id,status){
   const t=ticketById(id);
-  if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
-  navigator.geolocation.getCurrentPosition(p=>{
-    t.gps={lat:p.coords.latitude,lng:p.coords.longitude,at:Date.now()};
-    addHistory(t,currentUser(),'תיעוד נ.צ ביצוע',t.gps.lat.toFixed(5)+', '+t.gps.lng.toFixed(5));
-    saveDB(); render(); toast('נ.צ הביצוע תועד');
-  },()=>toast('לא ניתן לקבל מיקום — יש לאשר הרשאה'));
+  if(!canEdit(ME,t)){ toast('רק הגורם המטפל יכול לעדכן פניה זו'); return; }
+  if(status==='done' && t.photosAfter.length===0){ toast('⚠️ לא ניתן לסמן "הושלמה" ללא תמונת "אחרי"'); return; }
+  const upd={status};
+  if(status==='done'&&$('#wlog')) upd.work_log=$('#wlog').value;
+  const {error}=await sb.from('tickets').update(upd).eq('id',id);
+  if(error){ errToast(error); return; }
+  await loadAll(); render(); toast('הסטטוס עודכן: '+STATUSES[status]);
+}
+async function transferTicket(id,toId){
+  const t=ticketById(id), to=userById(toId);
+  if(!canEdit(ME,t)){ toast('רק הגורם המטפל יכול להעביר פניה זו'); return; }
+  const upd={assigned_to:toId};
+  if(t.status!=='done') upd.status='open';
+  const {error}=await sb.from('tickets').update(upd).eq('id',id);
+  if(error){ errToast(error); return; }
+  await loadAll(); closeModal(); render(); toast('הפניה הועברה אל '+to.name);
 }
 function openTransfer(id){
-  const u=currentUser(), t=ticketById(id);
+  const t=ticketById(id);
   const others=DB.users.filter(x=>x.id!==t.assignedTo);
   showModal(`<h2>↪ העברת פניה (אסקלציה) <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-info">מספר הפניה <b dir="ltr">${t.number}</b> נשמר לאורך כל התהליך. לאחר ההעברה רק הגורם החדש יוכל לעדכן את הפניה.</div>
@@ -897,8 +954,32 @@ function openTransfer(id){
       <select id="tr_to">${others.map(w=>`<option value="${w.id}">${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select></div>
     <button class="btn btn-primary btn-block" onclick="transferTicket('${id}',$('#tr_to').value)">אישור העברה</button>`);
 }
+async function changeSLA(id){
+  if(ME.role==='field'){ toast('רק מנהל יכול לשנות יעד'); return; }
+  const t=ticketById(id), h=parseFloat($('#sla_h').value);
+  if(!h||h<=0){ toast('ערך לא תקין'); return; }
+  const dueAt=new Date(t.createdAt+h*3600000).toISOString();
+  const {error}=await sb.from('tickets').update({sla_hours:h,due_at:dueAt}).eq('id',id);
+  if(error){ errToast(error); return; }
+  await loadAll(); render(); toast('היעד עודכן');
+}
+async function saveWorkLog(id){
+  const t=ticketById(id); if(!canEdit(ME,t)) return;
+  const {error}=await sb.from('tickets').update({work_log:$('#wlog').value}).eq('id',id);
+  if(error){ errToast(error); return; }
+  t.workLog=$('#wlog').value; toast('התיאור נשמר');
+}
+async function grabTicketGPS(id){
+  if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
+  navigator.geolocation.getCurrentPosition(async p=>{
+    const {error}=await sb.from('tickets').update({gps_lat:p.coords.latitude,gps_lng:p.coords.longitude,gps_at:new Date().toISOString()}).eq('id',id);
+    if(error){ errToast(error); return; }
+    await addHistory(id,'תיעוד נ.צ ביצוע',p.coords.latitude.toFixed(5)+', '+p.coords.longitude.toFixed(5));
+    await loadAll(); render(); toast('נ.צ הביצוע תועד');
+  },()=>toast('לא ניתן לקבל מיקום — יש לאשר הרשאה'));
+}
 
-/* ---------- טיימרים חיים (עדכון כל דקה) ---------- */
+/* ---------- טיימרים חיים ---------- */
 let _timerH=null;
 function startLiveTimers(){
   clearInterval(_timerH);
@@ -914,9 +995,8 @@ function startLiveTimers(){
     });
   },60000);
 }
-setInterval(()=>{ if(['home','tickets'].includes(VIEW.name)&&currentUser()) startLiveTimers(); },60000);
 
-/* ---------- מפות (Leaflet + OpenStreetMap) ---------- */
+/* ---------- מפות ---------- */
 function initTicketMap(id){
   const t=ticketById(id);
   if(!t||!t.gps||!window.L||!$('#tmap')) return;
@@ -929,7 +1009,7 @@ function initTicketMap(id){
 function initBigMap(){
   if(!window.L||!$('#bigmap')) return;
   try{
-    const m=L.map('bigmap').setView([32.702,35.297],12); /* אזור נצרת */
+    const m=L.map('bigmap').setView([32.702,35.297],12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(m);
     const pts=DB.tickets.filter(t=>t.gps&&t.status!=='done');
     pts.forEach(t=>{
@@ -948,7 +1028,6 @@ function vBoard(u){
   const slaPct=done.length?Math.round(inSLA/done.length*100):null;
   const lateOpen=open.filter(t=>Date.now()>t.dueAt);
   const transferred=DB.tickets.filter(t=>t.status!=='done'&&t.responseResetAt);
-  /* עומס לפי עובד */
   const byWorker=DB.users.map(w=>({w, n:open.filter(t=>t.assignedTo===w.id).length})).filter(x=>x.n>0).sort((a,b)=>b.n-a.n);
   const maxN=Math.max(1,...byWorker.map(x=>x.n));
   return `
@@ -958,7 +1037,6 @@ function vBoard(u){
     ${statCard(transferred.length,'פניות שהועברו','var(--transfer)','tickets','')}
     <div class="stat"><div class="n" style="color:var(--success)">${slaPct===null?'—':slaPct+'%'}</div><div class="l">עמידה בזמני טיפול</div><div class="bar" style="background:var(--success);opacity:.25"></div></div>
   </div>
-
   <div class="grid grid-2">
     <div class="card">
       <div class="section-t">👥 פניות פתוחות לכל עובד</div>
@@ -978,7 +1056,6 @@ function vBoard(u){
         </div>`).join(''):'<div class="hint">אין חריגות — כל הפניות בתוך היעד. 👏</div>'}
     </div>
   </div>
-
   <div class="card" style="margin-top:14px">
     <div class="section-t">↪ פניות שעברו לטיפול גורם אחר (פתוחות)</div>
     ${transferred.length?`<table class="rep"><tr><th>מס׳ פניה</th><th>סוג</th><th>גורם נוכחי</th><th>הועברה</th><th>סטטוס</th></tr>
@@ -997,7 +1074,6 @@ function vReports(u){
   const byCity=CITIES.map(c=>({c,n:T.filter(t=>t.city===c).length})).filter(x=>x.n>0);
   const done=T.filter(t=>t.status==='done');
   const avgMs=done.length?done.reduce((a,t)=>a+(t.completedAt-t.createdAt),0)/done.length:0;
-  /* תפוקת אנשי שטח: פניות שהושלמו לפי גורם מטפל */
   const output=DB.users.map(w=>{
     const mine=done.filter(t=>t.assignedTo===w.id);
     const inSLA=mine.filter(t=>t.completedAt<=t.dueAt).length;
@@ -1037,7 +1113,7 @@ function vUsers(u){
   return `<div class="card">
     <div class="section-t" style="justify-content:space-between">👥 ניהול משתמשים והרשאות
       <button class="btn btn-primary btn-sm" onclick="openAddUser()">➕ הוספת משתמש</button></div>
-    <div class="alert alert-info">כל נרשם חדש מוגדר תחילה כ<b>איש שטח</b>. כאן ניתן להוסיף משתמשים ביוזמתך, לשדרג הרשאות ולאפס סיסמאות.</div>
+    <div class="alert alert-info">כל נרשם חדש מוגדר תחילה כ<b>איש שטח</b>. כאן ניתן להוסיף משתמשים ביוזמתך, לשדרג הרשאות ולשלוח מייל איפוס סיסמה.</div>
     <table class="rep"><tr><th>שם</th><th>דוא"ל</th><th>טלפון</th><th>הרשאה</th><th></th></tr>
     ${DB.users.map(w=>`<tr>
       <td><b>${esc(w.name)}</b></td>
@@ -1045,23 +1121,36 @@ function vUsers(u){
       <td dir="ltr" style="text-align:right">${esc(w.phone||'—')}</td>
       <td>${w.id===u.id?ROLES[w.role]+' (אתה)':`<select style="width:auto;padding:6px 10px;font-size:13px" onchange="setRole('${w.id}',this.value)">
         ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${w.role===k?'selected':''}>${v}</option>`).join('')}</select>`}</td>
-      <td>${w.id!==u.id?`<button class="btn btn-outline btn-sm" onclick="resetUserPass('${w.id}')">איפוס סיסמה</button>`:''}</td>
+      <td>${w.id!==u.id?`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס סיסמה</button>`:''}</td>
     </tr>`).join('')}</table>
   </div>`;
 }
+async function setRole(id,role){
+  const {error}=await sb.from('profiles').update({role}).eq('id',id);
+  if(error){ errToast(error); render(); return; }
+  const w=userById(id); w.role=role; toast(w.name+' עודכן ל'+ROLES[role]); render();
+}
+async function sendResetMail(id){
+  const w=userById(id);
+  const {error}=await sb.auth.resetPasswordForEmail(w.email,{redirectTo:location.origin+location.pathname});
+  if(error){ errToast(error); return; }
+  toast('נשלח מייל איפוס סיסמה אל '+w.email);
+}
+
+/* ---------- הוספת משתמש ע"י מנהל העל ---------- */
+/* נעשה שימוש בלקוח משני שאינו שומר סשן, כדי שההרשמה לא תנתק את מנהל העל */
 function openAddUser(){
   showModal(`<h2>➕ הוספת משתמש חדש <button class="x" onclick="closeModal()">×</button></h2>
     <div id="msg"></div>
     <div class="field"><label class="req" for="au_name">שם מלא</label><input id="au_name"></div>
     <div class="field"><label class="req" for="au_email">דוא"ל</label><input type="email" id="au_email" dir="ltr" style="text-align:left"></div>
-    <div class="field"><label for="au_phone">טלפון</label><input type="tel" id="au_phone" dir="ltr" style="text-align:left"></div>
     <div class="field"><label class="req">רמת הרשאה</label>
       <select id="au_role">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${k==='field'?'selected':''}>${v}</option>`).join('')}</select></div>
     ${pwField('au_pass','סיסמה ראשונית','new-password')}
     <div style="display:flex;gap:8px;margin-bottom:14px">
       <button class="btn btn-outline btn-sm" onclick="genAuPass()">🎲 הגרלת סיסמה ראשונית</button>
     </div>
-    <button class="btn btn-primary btn-block" onclick="doAddUser()">יצירת משתמש</button>
+    <button class="btn btn-primary btn-block" id="au_btn" onclick="doAddUser()">יצירת משתמש</button>
     <div class="hint" style="margin-top:8px">מסרו לעובד את הדוא"ל והסיסמה הראשונית; מומלץ שיחליף אותה דרך "שכחתי סיסמה".</div>`);
 }
 function genAuPass(){
@@ -1070,32 +1159,49 @@ function genAuPass(){
   inp.dispatchEvent(new Event('input'));
   const eye=document.querySelector('[data-eye="au_pass"]'); if(eye) eye.textContent='🙈';
 }
-function doAddUser(){
+async function doAddUser(){
   const name=$('#au_name').value.trim(), email=$('#au_email').value.trim().toLowerCase(),
-        phone=$('#au_phone').value.trim(), role=$('#au_role').value, pass=$('#au_pass').value, m=$('#msg');
+        role=$('#au_role').value, pass=$('#au_pass').value, m=$('#msg'), btn=$('#au_btn');
   if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ m.innerHTML='<div class="alert alert-err">כתובת דוא"ל לא תקינה.</div>'; return; }
-  if(DB.users.some(u=>u.email.toLowerCase()===email)){ m.innerHTML='<div class="alert alert-err">דוא"ל זה כבר רשום במערכת.</div>'; return; }
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים.</div>'; return; }
-  DB.users.push({id:uid(),name,email,phone,role,pass,createdAt:Date.now(),addedBy:currentUser().id});
-  saveDB(); closeModal(); render(); toast('המשתמש '+name+' נוסף בהצלחה ('+ROLES[role]+')');
-}
-function setRole(id,role){
-  const w=userById(id); w.role=role; saveDB(); toast(w.name+' עודכן ל'+ROLES[role]); render();
-}
-function resetUserPass(id){
-  const w=userById(id);
-  const tmp='Aa'+Math.floor(100000+Math.random()*900000);
-  w.pass=tmp; saveDB();
-  showModal(`<h2>איפוס סיסמה <button class="x" onclick="closeModal()">×</button></h2>
-    <div class="alert alert-ok">הסיסמה של <b>${esc(w.name)}</b> אופסה. סיסמה זמנית:</div>
-    <div style="text-align:center;font-size:24px;font-weight:800;letter-spacing:2px" dir="ltr">${tmp}</div>
-    <div class="hint" style="text-align:center;margin-top:8px">יש למסור לעובד ולהנחות אותו להחליף דרך "שכחתי סיסמה".</div>`);
+  btn.disabled=true; btn.textContent='יוצר משתמש…';
+  try{
+    const tmp=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:false,storageKey:'hari_tmp_signup',autoRefreshToken:false}});
+    const {data,error}=await tmp.auth.signUp({email,password:pass,options:{data:{name}}});
+    if(error) throw error;
+    const newId=data.user?.id;
+    /* הפרופיל נוצר בטריגר; אם נבחרה הרשאה גבוהה — מעדכנים (עשוי לקחת רגע) */
+    if(newId&&role!=='field'){
+      for(let i=0;i<6;i++){
+        const {data:p}=await sb.from('profiles').select('id').eq('id',newId).maybeSingle();
+        if(p){ await sb.from('profiles').update({role}).eq('id',newId); break; }
+        await new Promise(r=>setTimeout(r,700));
+      }
+    }
+    await loadAll(); closeModal(); render();
+    toast('המשתמש '+name+' נוסף ('+ROLES[role]+')'+(data.session?'':' — ייתכן שיידרש אישור מייל'));
+  }catch(e){
+    btn.disabled=false; btn.textContent='יצירת משתמש';
+    const t=/already registered/i.test(e.message)?'דוא"ל זה כבר רשום במערכת.':e.message;
+    m.innerHTML=`<div class="alert alert-err">${esc(t)}</div>`;
+  }
 }
 
 /* ================= אתחול ================= */
-saveDB();
-render();
+sb.auth.onAuthStateChange((event)=>{
+  if(event==='PASSWORD_RECOVERY'){ RECOVERY=true; route('reset'); }
+});
+(async function boot(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(RECOVERY){ route('reset'); return; }
+  if(session){ await afterAuth(); } else { route('landing'); }
+})();
+/* רענון נתונים שקט כל דקה במסכי צפייה (לא בטפסים) */
+setInterval(async()=>{
+  if(ME&&['home','tickets','board','reports','map'].includes(VIEW.name)&&!document.querySelector('.modal-bg')){
+    await loadAll(); render();
+  }
+},60000);
 </script>
 </body>
 </html>
