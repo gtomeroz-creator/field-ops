@@ -166,6 +166,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 .empty{text-align:center;color:var(--text-3);padding:44px 16px;font-size:14px}
 .empty .i{font-size:38px;margin-bottom:10px}
 #toast{position:fixed;bottom:80px;inset-inline:0;display:flex;justify-content:center;z-index:200;pointer-events:none}
+#toast[hidden]{display:none}
 #toast>div{background:var(--text);color:#fff;padding:11px 22px;border-radius:99px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
 .map-box{height:340px;border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;z-index:1}
 .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -243,6 +244,13 @@ const currentUser=()=>ME;
 function passChecks(p){ return { len:p.length>=8, eng:/[A-Za-z]/.test(p), num:/[0-9]/.test(p) }; }
 const passOK=p=>{const c=passChecks(p);return c.len&&c.eng&&c.num;};
 
+/* ---------- משתמשי טלפון: מייל טכני שקוף לעובד ---------- */
+const TECH_DOMAIN='@hari-field.local';
+const isTechEmail=e=>(e||'').toLowerCase().endsWith(TECH_DOMAIN);
+function normPhone(p){ return (p||'').replace(/\D/g,''); }
+function phoneToEmail(p){ return normPhone(p)+TECH_DOMAIN; }
+function phoneValid(p){ const d=normPhone(p); return /^0\d{8,9}$/.test(d); }
+
 /* ================= טעינת נתונים מהענן ================= */
 async function loadAll(){
   try{
@@ -285,6 +293,7 @@ async function loadAll(){
       photosAfter:(photosBy[t.id]||{}).after||[]
     }));
     OFFLINE=false;
+    try{ checkNewAssignments(); }catch(e){}
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
   }catch(e){
     /* מצב לא מקוון: מציגים את הנתונים האחרונים שנשמרו במכשיר */
@@ -294,6 +303,46 @@ async function loadAll(){
   }
 }
 async function refresh(){ await loadAll(); render(); }
+
+/* ================= התראות (מדרגה 1): פניה חדשה ששויכה אליי ================= */
+let _prevMyIds=null; /* null = טעינה ראשונה, אין להתריע */
+function checkNewAssignments(){
+  if(!ME) return;
+  const myIds=new Set(DB.tickets.filter(t=>t.assignedTo===ME.id&&t.status!=='done').map(t=>t.id));
+  if(_prevMyIds!==null){
+    for(const id of myIds){
+      if(!_prevMyIds.has(id)){
+        const t=ticketById(id);
+        notifyUser('📋 פניה חדשה לטיפולך — '+t.number, t.type+' · '+t.city+(t.address?' · '+t.address:''), id);
+      }
+    }
+  }
+  _prevMyIds=myIds;
+}
+function notifyUser(title,body,ticketId){
+  toast(title);
+  try{ navigator.vibrate?.([200,100,200]); }catch(e){}
+  const N=window.Notification;
+  if(N && N.permission==='granted'){
+    try{
+      const n=new N(title,{body,tag:'ticket-'+ticketId});
+      n.onclick=()=>{ window.focus(); route('ticket',ticketId); n.close(); };
+    }catch(e){}
+  }
+}
+function notifState(){
+  const N=window.Notification;
+  if(!N) return 'unsupported';
+  return N.permission; /* granted / denied / default */
+}
+async function askNotif(){
+  const N=window.Notification;
+  if(!N){ toast('הדפדפן במכשיר זה אינו תומך בהתראות'); return; }
+  const p=await N.requestPermission();
+  if(p==='granted'){ toast('התראות הופעלו ✔ תקבל חיווי על פניה חדשה'); }
+  else toast('ההתראות לא אושרו — ניתן לאשר דרך הגדרות האתר בדפדפן');
+  render();
+}
 
 /* ================= ניתוב ================= */
 let VIEW={name:'landing',arg:null};
@@ -360,11 +409,18 @@ function bindPwEyes(){
 }
 
 /* ================= התחברות (הסשן נשמר במכשיר — אין צורך בסיסמה בכל כניסה) ================= */
+let LG_MODE='phone';
 function vLogin(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
     <h1>התחברות למערכת</h1><div class="sub">ניהול אנשי שטח — הרי נצרת מים וביוב</div>
     <div id="msg"></div>
-    <div class="field"><label class="req" for="lg_email">דוא"ל</label><input type="email" id="lg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="btn btn-sm ${LG_MODE==='phone'?'btn-primary':'btn-outline'}" style="flex:1" onclick="LG_MODE='phone';render()">📱 טלפון</button>
+      <button class="btn btn-sm ${LG_MODE==='email'?'btn-primary':'btn-outline'}" style="flex:1" onclick="LG_MODE='email';render()">✉️ דוא"ל</button>
+    </div>
+    ${LG_MODE==='phone'
+      ?`<div class="field"><label class="req" for="lg_phone">מספר טלפון</label><input type="tel" id="lg_phone" dir="ltr" style="text-align:left" inputmode="numeric" placeholder="050-1234567" autocomplete="tel"></div>`
+      :`<div class="field"><label class="req" for="lg_email">דוא"ל</label><input type="email" id="lg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>`}
     ${pwField('lg_pass')}
     <button class="btn btn-primary btn-block" id="lg_btn" onclick="doLogin()">כניסה</button>
     <div style="display:flex;justify-content:space-between;margin-top:14px">
@@ -375,12 +431,20 @@ function vLogin(){
   </div></div></div>`;
 }
 async function doLogin(){
-  const email=$('#lg_email').value.trim().toLowerCase(), pass=$('#lg_pass').value, btn=$('#lg_btn');
+  let email;
+  if(LG_MODE==='phone'){
+    const ph=$('#lg_phone').value;
+    if(!phoneValid(ph)){ $('#msg').innerHTML='<div class="alert alert-err">מספר טלפון לא תקין (למשל 0501234567).</div>'; return; }
+    email=phoneToEmail(ph);
+  }else{
+    email=$('#lg_email').value.trim().toLowerCase();
+  }
+  const pass=$('#lg_pass').value, btn=$('#lg_btn');
   btn.disabled=true; btn.textContent='מתחבר…';
   const {error}=await sb.auth.signInWithPassword({email,password:pass});
   if(error){
     btn.disabled=false; btn.textContent='כניסה';
-    const m=/Invalid login credentials/i.test(error.message)?'דוא"ל או סיסמה שגויים.'
+    const m=/Invalid login credentials/i.test(error.message)?(LG_MODE==='phone'?'טלפון או סיסמה שגויים.':'דוא"ל או סיסמה שגויים.')
           :/Email not confirmed/i.test(error.message)?'החשבון טרם אושר — יש ללחוץ על הקישור שנשלח לדוא"ל.'
           :error.message;
     $('#msg').innerHTML=`<div class="alert alert-err">${esc(m)}</div>`;
@@ -394,32 +458,47 @@ function vRegister(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
     <h1>הרשמה למערכת</h1><div class="sub">משתמש חדש נרשם כאיש שטח. מנהל־על יכול לעדכן הרשאות בהמשך.</div>
     <div id="msg"></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="btn btn-sm ${LG_MODE==='phone'?'btn-primary':'btn-outline'}" style="flex:1" onclick="LG_MODE='phone';render()">📱 טלפון</button>
+      <button class="btn btn-sm ${LG_MODE==='email'?'btn-primary':'btn-outline'}" style="flex:1" onclick="LG_MODE='email';render()">✉️ דוא"ל</button>
+    </div>
     <div class="field"><label class="req" for="rg_name">שם מלא</label><input id="rg_name" autocomplete="name"></div>
-    <div class="field"><label class="req" for="rg_email">דוא"ל</label><input type="email" id="rg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
-    <div class="field"><label for="rg_phone">טלפון</label><input type="tel" id="rg_phone" dir="ltr" style="text-align:left" autocomplete="tel"></div>
+    ${LG_MODE==='phone'
+      ?`<div class="field"><label class="req" for="rg_phone">מספר טלפון (ישמש לכניסה)</label><input type="tel" id="rg_phone" dir="ltr" style="text-align:left" inputmode="numeric" placeholder="050-1234567" autocomplete="tel"></div>
+        <div class="alert alert-info" style="font-size:12.5px">בהרשמה עם טלפון — שכחת סיסמה? מנהל המערכת ינפיק לך סיסמה זמנית.</div>`
+      :`<div class="field"><label class="req" for="rg_email">דוא"ל</label><input type="email" id="rg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
+        <div class="field"><label for="rg_phone">טלפון</label><input type="tel" id="rg_phone" dir="ltr" style="text-align:left" autocomplete="tel"></div>`}
     ${pwField('rg_pass','סיסמה','new-password')}
     <button class="btn btn-primary btn-block" id="rg_btn" onclick="doRegister()">הרשמה</button>
     <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('login')">יש לך חשבון? התחברות</a></div>
   </div></div></div>`;
 }
 async function doRegister(){
-  const name=$('#rg_name').value.trim(), email=$('#rg_email').value.trim().toLowerCase(),
-        phone=$('#rg_phone').value.trim(), pass=$('#rg_pass').value, m=$('#msg'), btn=$('#rg_btn');
-  if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
+  const name=$('#rg_name').value.trim(), phone=($('#rg_phone')?.value||'').trim(),
+        pass=$('#rg_pass').value, m=$('#msg'), btn=$('#rg_btn');
+  let email;
+  if(LG_MODE==='phone'){
+    if(!name){ m.innerHTML='<div class="alert alert-err">יש למלא שם.</div>'; return; }
+    if(!phoneValid(phone)){ m.innerHTML='<div class="alert alert-err">מספר טלפון לא תקין (למשל 0501234567).</div>'; return; }
+    email=phoneToEmail(phone);
+  }else{
+    email=$('#rg_email').value.trim().toLowerCase();
+    if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
+  }
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים.</div>'; return; }
   btn.disabled=true; btn.textContent='נרשם…';
-  const {data,error}=await sb.auth.signUp({email,password:pass,options:{data:{name,phone}}});
+  const {data,error}=await sb.auth.signUp({email,password:pass,options:{data:{name,phone:normPhone(phone)}}});
   btn.disabled=false; btn.textContent='הרשמה';
   if(error){
-    const t=/already registered/i.test(error.message)?'דוא"ל זה כבר רשום במערכת.':error.message;
+    const t=/already registered/i.test(error.message)?(LG_MODE==='phone'?'מספר טלפון זה כבר רשום במערכת.':'דוא"ל זה כבר רשום במערכת.'):error.message;
     m.innerHTML=`<div class="alert alert-err">${esc(t)}</div>`; return;
   }
   if(!data.session){
     m.innerHTML='<div class="alert alert-ok">נשלח מייל אישור לכתובת שהזנת — יש ללחוץ על הקישור ואז להתחבר.</div>';
     return;
   }
-  /* עדכון טלפון בפרופיל (נוצר ע"י טריגר בשרת) */
-  if(phone){ for(let i=0;i<5;i++){ const {error:e}=await sb.from('profiles').update({phone}).eq('id',data.session.user.id); if(!e) break; await new Promise(r=>setTimeout(r,600)); } }
+  const np=normPhone(phone);
+  if(np){ for(let i=0;i<5;i++){ const {error:e}=await sb.from('profiles').update({phone:np}).eq('id',data.session.user.id); if(!e) break; await new Promise(r=>setTimeout(r,600)); } }
   await afterAuth(); toast('נרשמת בהצלחה — הוגדרת כאיש שטח');
 }
 
@@ -427,6 +506,7 @@ async function doRegister(){
 function vForgot(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
     <h1>שחזור סיסמה</h1><div class="sub">נשלח קישור איפוס לכתובת הדוא"ל שלך. הקישור יחזיר אותך לכאן לבחירת סיסמה חדשה.</div>
+    <div class="alert alert-info" style="font-size:12.5px">נרשמת עם מספר טלפון (ללא דוא"ל)? פנה למנהל המערכת — הוא ינפיק לך סיסמה זמנית.</div>
     <div id="msg"></div>
     <div class="field"><label class="req" for="fg_email">דוא"ל</label><input type="email" id="fg_email" dir="ltr" style="text-align:left"></div>
     <button class="btn btn-primary btn-block" onclick="doForgot()">שליחת קישור איפוס</button>
@@ -470,6 +550,11 @@ async function afterAuth(){
   if(!ME){ toast('שגיאה בטעינת הפרופיל — נסו לרענן'); return; }
   await loadAll();
   route('home');
+  /* הצעה חד-פעמית להפעיל התראות */
+  if(notifState()==='default' && !store.get('hari_notif_hint')){
+    store.set('hari_notif_hint','1');
+    setTimeout(()=>toast('💡 לחיווי על פניות חדשות — לחץ על 🔕 בסרגל העליון'),1800);
+  }
 }
 async function logout(){ await sb.auth.signOut(); ME=null; route('landing'); }
 
@@ -485,6 +570,7 @@ function vShell(u){
     <div class="brand"><div class="logo">💧</div><div>ניהול אנשי שטח<div style="font-size:11px;font-weight:400;opacity:.8">הרי נצרת מים וביוב</div></div></div>
     <div class="spacer"></div>
     <button onclick="refresh().then(()=>toast('הנתונים עודכנו'))" title="רענון נתונים" style="font-size:17px;padding:7px">🔄</button>
+    ${notifState()==='default'?'<button onclick="askNotif()" title="הפעלת התראות על פניות חדשות" style="font-size:17px;padding:7px">🔕</button>':notifState()==='granted'?'<span title="התראות פעילות" style="font-size:17px;padding:7px">🔔</span>':''}
     <div class="who">${esc(u.name)}<br><span style="opacity:.75">${ROLES[u.role]}</span></div>
     <button onclick="logout()" title="התנתקות מהמערכת" style="display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.35);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600">⎋ התנתקות</button>
   </div></div>
@@ -1114,14 +1200,16 @@ function vUsers(u){
     <div class="section-t" style="justify-content:space-between">👥 ניהול משתמשים והרשאות
       <button class="btn btn-primary btn-sm" onclick="openAddUser()">➕ הוספת משתמש</button></div>
     <div class="alert alert-info">כל נרשם חדש מוגדר תחילה כ<b>איש שטח</b>. כאן ניתן להוסיף משתמשים ביוזמתך, לשדרג הרשאות ולשלוח מייל איפוס סיסמה.</div>
-    <table class="rep"><tr><th>שם</th><th>דוא"ל</th><th>טלפון</th><th>הרשאה</th><th></th></tr>
+    <table class="rep"><tr><th>שם</th><th>זיהוי כניסה</th><th>טלפון</th><th>הרשאה</th><th></th></tr>
     ${DB.users.map(w=>`<tr>
       <td><b>${esc(w.name)}</b></td>
-      <td dir="ltr" style="text-align:right">${esc(w.email)}</td>
+      <td dir="ltr" style="text-align:right">${isTechEmail(w.email)?'📱 '+esc(w.email.replace(TECH_DOMAIN,'')):esc(w.email)}</td>
       <td dir="ltr" style="text-align:right">${esc(w.phone||'—')}</td>
       <td>${w.id===u.id?ROLES[w.role]+' (אתה)':`<select style="width:auto;padding:6px 10px;font-size:13px" onchange="setRole('${w.id}',this.value)">
         ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${w.role===k?'selected':''}>${v}</option>`).join('')}</select>`}</td>
-      <td>${w.id!==u.id?`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס סיסמה</button>`:''}</td>
+      <td>${w.id!==u.id?(isTechEmail(w.email)
+        ?`<button class="btn btn-outline btn-sm" onclick="tempResetPass('${w.id}')">סיסמה זמנית</button>`
+        :`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס סיסמה</button>`):''}</td>
     </tr>`).join('')}</table>
   </div>`;
 }
@@ -1137,13 +1225,36 @@ async function sendResetMail(id){
   toast('נשלח מייל איפוס סיסמה אל '+w.email);
 }
 
+/* איפוס סיסמה זמנית לעובד־טלפון — דרך פונקציה מאובטחת בשרת (מנהל־על בלבד) */
+async function tempResetPass(id){
+  const w=userById(id);
+  const tmp='Aa'+Math.floor(100000+Math.random()*900000);
+  const {error}=await sb.rpc('admin_reset_password',{target_user:id,new_password:tmp});
+  if(error){
+    if(/function .*admin_reset_password.* does not exist/i.test(error.message))
+      toast('יש להריץ קודם את תוספת ה-SQL לאיפוס סיסמאות (ראה הנחיות)');
+    else errToast(error);
+    return;
+  }
+  showModal(`<h2>סיסמה זמנית <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-ok">הסיסמה של <b>${esc(w.name)}</b> אופסה. סיסמה זמנית:</div>
+    <div style="text-align:center;font-size:24px;font-weight:800;letter-spacing:2px" dir="ltr">${tmp}</div>
+    <div class="hint" style="text-align:center;margin-top:8px">מסרו לעובד בעל־פה או בהודעה. מומלץ שיחליף אותה לאחר הכניסה.</div>`);
+}
+
 /* ---------- הוספת משתמש ע"י מנהל העל ---------- */
 /* נעשה שימוש בלקוח משני שאינו שומר סשן, כדי שההרשמה לא תנתק את מנהל העל */
 function openAddUser(){
   showModal(`<h2>➕ הוספת משתמש חדש <button class="x" onclick="closeModal()">×</button></h2>
     <div id="msg"></div>
     <div class="field"><label class="req" for="au_name">שם מלא</label><input id="au_name"></div>
-    <div class="field"><label class="req" for="au_email">דוא"ל</label><input type="email" id="au_email" dir="ltr" style="text-align:left"></div>
+    <div class="field"><label class="req">זיהוי לכניסה</label>
+      <select id="au_idtype" onchange="$('#au_email_row').hidden=this.value!=='email';$('#au_phone_lbl').textContent=this.value==='phone'?'מספר טלפון (ישמש לכניסה)':'טלפון'">
+        <option value="phone">מספר טלפון (לעובד ללא מייל ארגוני)</option>
+        <option value="email">כתובת דוא"ל</option>
+      </select></div>
+    <div class="field" id="au_email_row" hidden><label class="req" for="au_email">דוא"ל</label><input type="email" id="au_email" dir="ltr" style="text-align:left"></div>
+    <div class="field"><label class="req" id="au_phone_lbl" for="au_phone">מספר טלפון (ישמש לכניסה)</label><input type="tel" id="au_phone" dir="ltr" style="text-align:left" inputmode="numeric" placeholder="050-1234567"></div>
     <div class="field"><label class="req">רמת הרשאה</label>
       <select id="au_role">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${k==='field'?'selected':''}>${v}</option>`).join('')}</select></div>
     ${pwField('au_pass','סיסמה ראשונית','new-password')}
@@ -1151,7 +1262,7 @@ function openAddUser(){
       <button class="btn btn-outline btn-sm" onclick="genAuPass()">🎲 הגרלת סיסמה ראשונית</button>
     </div>
     <button class="btn btn-primary btn-block" id="au_btn" onclick="doAddUser()">יצירת משתמש</button>
-    <div class="hint" style="margin-top:8px">מסרו לעובד את הדוא"ל והסיסמה הראשונית; מומלץ שיחליף אותה דרך "שכחתי סיסמה".</div>`);
+    <div class="hint" style="margin-top:8px">מסרו לעובד את פרטי הכניסה (טלפון/דוא"ל + סיסמה ראשונית). עובד־טלפון ששכח סיסמה יקבל ממך סיסמה זמנית ממסך זה.</div>`);
 }
 function genAuPass(){
   const p='Aa'+Math.floor(100000+Math.random()*900000);
@@ -1160,21 +1271,34 @@ function genAuPass(){
   const eye=document.querySelector('[data-eye="au_pass"]'); if(eye) eye.textContent='🙈';
 }
 async function doAddUser(){
-  const name=$('#au_name').value.trim(), email=$('#au_email').value.trim().toLowerCase(),
+  const name=$('#au_name').value.trim(), idtype=$('#au_idtype').value,
+        phone=$('#au_phone').value.trim(),
         role=$('#au_role').value, pass=$('#au_pass').value, m=$('#msg'), btn=$('#au_btn');
-  if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
+  let email;
+  if(idtype==='phone'){
+    if(!name){ m.innerHTML='<div class="alert alert-err">יש למלא שם.</div>'; return; }
+    if(!phoneValid(phone)){ m.innerHTML='<div class="alert alert-err">מספר טלפון לא תקין (למשל 0501234567).</div>'; return; }
+    email=phoneToEmail(phone);
+  }else{
+    email=$('#au_email').value.trim().toLowerCase();
+    if(!name||!email){ m.innerHTML='<div class="alert alert-err">יש למלא שם ודוא"ל.</div>'; return; }
+  }
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים.</div>'; return; }
   btn.disabled=true; btn.textContent='יוצר משתמש…';
   try{
     const tmp=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:false,storageKey:'hari_tmp_signup',autoRefreshToken:false}});
-    const {data,error}=await tmp.auth.signUp({email,password:pass,options:{data:{name}}});
+    const {data,error}=await tmp.auth.signUp({email,password:pass,options:{data:{name,phone:normPhone(phone)}}});
     if(error) throw error;
     const newId=data.user?.id;
-    /* הפרופיל נוצר בטריגר; אם נבחרה הרשאה גבוהה — מעדכנים (עשוי לקחת רגע) */
-    if(newId&&role!=='field'){
+    if(newId){
       for(let i=0;i<6;i++){
         const {data:p}=await sb.from('profiles').select('id').eq('id',newId).maybeSingle();
-        if(p){ await sb.from('profiles').update({role}).eq('id',newId); break; }
+        if(p){
+          const upd={phone:normPhone(phone)};
+          if(role!=='field') upd.role=role;
+          await sb.from('profiles').update(upd).eq('id',newId);
+          break;
+        }
         await new Promise(r=>setTimeout(r,700));
       }
     }
@@ -1182,7 +1306,7 @@ async function doAddUser(){
     toast('המשתמש '+name+' נוסף ('+ROLES[role]+')'+(data.session?'':' — ייתכן שיידרש אישור מייל'));
   }catch(e){
     btn.disabled=false; btn.textContent='יצירת משתמש';
-    const t=/already registered/i.test(e.message)?'דוא"ל זה כבר רשום במערכת.':e.message;
+    const t=/already registered/i.test(e.message)?(idtype==='phone'?'מספר טלפון זה כבר רשום במערכת.':'דוא"ל זה כבר רשום במערכת.'):e.message;
     m.innerHTML=`<div class="alert alert-err">${esc(t)}</div>`;
   }
 }
