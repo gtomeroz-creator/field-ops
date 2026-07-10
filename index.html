@@ -251,6 +251,42 @@ function normPhone(p){ return (p||'').replace(/\D/g,''); }
 function phoneToEmail(p){ return normPhone(p)+TECH_DOMAIN; }
 function phoneValid(p){ const d=normPhone(p); return /^0\d{8,9}$/.test(d); }
 
+/* ---------- שיתוף בוואטסאפ ---------- */
+function waPhoneIntl(p){ const d=normPhone(p); return d.startsWith('0')?'972'+d.slice(1):d; }
+function ticketLink(t){ return location.origin+location.pathname+'#t='+t.id; }
+function ticketWaText(t){
+  const lines=[
+    '🔧 פקודת עבודה '+t.number,
+    'סוג: '+t.type+' ('+DOMAINS[t.domain].name+')',
+    'ישוב: '+t.city+(t.address?' · '+t.address:''),
+    'סטטוס: '+STATUSES[t.status],
+    'יעד טיפול: '+fmtDT(t.dueAt)
+  ];
+  if(t.customerName) lines.push('לקוח: '+t.customerName+(t.customerPhone?' · '+t.customerPhone:''));
+  if(t.description) lines.push('תיאור: '+t.description);
+  if(t.gps) lines.push('מיקום: https://maps.google.com/?q='+t.gps.lat+','+t.gps.lng);
+  lines.push('','לצפייה בפניה: '+ticketLink(t));
+  return lines.join('\n');
+}
+function waShare(ticketId,toUserId){
+  const t=ticketById(ticketId); if(!t) return;
+  const text=encodeURIComponent(ticketWaText(t));
+  const to=toUserId?userById(toUserId):null;
+  const url=(to&&to.phone)?`https://wa.me/${waPhoneIntl(to.phone)}?text=${text}`:`https://wa.me/?text=${text}`;
+  window.open(url,'_blank');
+}
+/* הצעה לשלוח לעובד בוואטסאפ לאחר שיוך/העברה */
+function offerWhatsApp(ticketId,toUserId){
+  const t=ticketById(ticketId), to=userById(toUserId);
+  if(!t||!to||to.id===ME.id) return;
+  showModal(`<h2>📲 לעדכן את ${esc(to.name)} בוואטסאפ? <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">הפניה <b dir="ltr">${t.number}</b> שויכה אל ${esc(to.name)}. ${to.phone?'אפשר לשלוח לו עכשיו הודעת וואטסאפ עם פרטי הפניה וקישור ישיר.':'לא רשום לו מספר טלפון — ההודעה תיפתח לבחירת נמען.'}</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-success" style="flex:1" onclick="waShare('${ticketId}','${toUserId}');closeModal()">📲 שליחה בוואטסאפ</button>
+      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">לא הפעם</button>
+    </div>`);
+}
+
 /* ================= טעינת נתונים מהענן ================= */
 async function loadAll(){
   try{
@@ -549,7 +585,10 @@ async function afterAuth(){
   }
   if(!ME){ toast('שגיאה בטעינת הפרופיל — נסו לרענן'); return; }
   await loadAll();
-  route('home');
+  /* קישור עמוק: כניסה מקישור וואטסאפ #t=<id> פותחת ישירות את הפניה */
+  const dl=(location.hash||'').match(/^#t=(.+)$/);
+  if(dl && ticketById(dl[1])){ history.replaceState(null,'',location.pathname); route('ticket',dl[1]); }
+  else route('home');
   /* הצעה חד-פעמית להפעיל התראות */
   if(notifState()==='default' && !store.get('hari_notif_hint')){
     store.set('hari_notif_hint','1');
@@ -756,6 +795,7 @@ async function doNewTicket(){
       address:addr, description:$('#nt_desc').value.trim(), assignedTo:$('#nt_assign').value
     });
     await loadAll(); toast('נפתחה פניה '+t.number); route('ticket',t.id);
+    if(t.assigned_to!==ME.id) setTimeout(()=>offerWhatsApp(t.id,t.assigned_to),400);
   }catch(e){ btn.disabled=false; btn.textContent='פתיחת פניה'; errToast(e); }
 }
 
@@ -861,7 +901,10 @@ function vTicket(u,id){
   const late=slaState(t)==='late';
   const handleMs=(t.status==='done'?t.completedAt:Date.now())-t.createdAt;
   return `
-  <button class="btn btn-outline btn-sm" onclick="route('tickets')" style="margin-bottom:12px">→ חזרה לרשימה</button>
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <button class="btn btn-outline btn-sm" onclick="route('tickets')">→ חזרה לרשימה</button>
+    <button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="waShare('${t.id}')">📲 שיתוף בוואטסאפ</button>
+  </div>
   <div class="card" style="margin-bottom:14px">
     <div class="detail-head">
       <div>
@@ -1030,6 +1073,7 @@ async function transferTicket(id,toId){
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
   await loadAll(); closeModal(); render(); toast('הפניה הועברה אל '+to.name);
+  setTimeout(()=>offerWhatsApp(id,toId),400);
 }
 function openTransfer(id){
   const t=ticketById(id);
