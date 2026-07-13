@@ -239,6 +239,7 @@ function errToast(e,fallback){
 const userById=id=>DB.users.find(u=>u.id===id);
 const userName=id=>userById(id)?.name||'—';
 const currentUser=()=>ME;
+const activeUsers=()=>DB.users.filter(u=>u.active!==false);
 
 /* ---------- סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים ---------- */
 function passChecks(p){ return { len:p.length>=8, eng:/[A-Za-z]/.test(p), num:/[0-9]/.test(p) }; }
@@ -580,10 +581,15 @@ async function afterAuth(){
   /* הפרופיל נוצר ע"י טריגר — ננסה כמה פעמים אם עוד לא הספיק */
   for(let i=0;i<6;i++){
     const {data}=await sb.from('profiles').select('*').eq('id',session.user.id).maybeSingle();
-    if(data){ ME={id:data.id,name:data.name,email:data.email,phone:data.phone||'',role:data.role}; break; }
+    if(data){ ME={id:data.id,name:data.name,email:data.email,phone:data.phone||'',role:data.role,active:data.active}; break; }
     await new Promise(r=>setTimeout(r,700));
   }
   if(!ME){ toast('שגיאה בטעינת הפרופיל — נסו לרענן'); return; }
+  if(ME.active===false){
+    await sb.auth.signOut(); ME=null; route('login');
+    setTimeout(()=>{ const m=$('#msg'); if(m) m.innerHTML='<div class="alert alert-err">חשבון זה הושבת. לפרטים יש לפנות למנהל המערכת.</div>'; },100);
+    return;
+  }
   await loadAll();
   /* קישור עמוק: כניסה מקישור וואטסאפ #t=<id> פותחת ישירות את הפניה */
   const dl=(location.hash||'').match(/^#t=(.+)$/);
@@ -776,7 +782,7 @@ function vNewTicket(u){
     <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label class="req">שיוך לגורם מטפל</label>
-      <select id="nt_assign">${DB.users.map(w=>`<option value="${w.id}" ${w.id===u.id?'selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
+      <select id="nt_assign">${activeUsers().map(w=>`<option value="${w.id}" ${w.id===u.id?'selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
       <div class="hint">הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
     <div class="field"><label>זמן יעד (SLA)</label>
       <input value="נקבע אוטומטית בשרת לפי סוג הפניה" disabled>
@@ -1077,7 +1083,7 @@ async function transferTicket(id,toId){
 }
 function openTransfer(id){
   const t=ticketById(id);
-  const others=DB.users.filter(x=>x.id!==t.assignedTo);
+  const others=activeUsers().filter(x=>x.id!==t.assignedTo);
   showModal(`<h2>↪ העברת פניה (אסקלציה) <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-info">מספר הפניה <b dir="ltr">${t.number}</b> נשמר לאורך כל התהליך. לאחר ההעברה רק הגורם החדש יוכל לעדכן את הפניה.</div>
     <div class="field"><label class="req">העברה אל</label>
@@ -1244,16 +1250,23 @@ function vUsers(u){
     <div class="section-t" style="justify-content:space-between">👥 ניהול משתמשים והרשאות
       <button class="btn btn-primary btn-sm" onclick="openAddUser()">➕ הוספת משתמש</button></div>
     <div class="alert alert-info">כל נרשם חדש מוגדר תחילה כ<b>איש שטח</b>. כאן ניתן להוסיף משתמשים ביוזמתך, לשדרג הרשאות ולשלוח מייל איפוס סיסמה.</div>
-    <table class="rep"><tr><th>שם</th><th>זיהוי כניסה</th><th>טלפון</th><th>הרשאה</th><th></th></tr>
-    ${DB.users.map(w=>`<tr>
+    <table class="rep"><tr><th>שם</th><th>זיהוי כניסה</th><th>טלפון</th><th>הרשאה</th><th>מצב</th><th></th></tr>
+    ${DB.users.map(w=>`<tr style="${w.active===false?'opacity:.55':''}">
       <td><b>${esc(w.name)}</b></td>
       <td dir="ltr" style="text-align:right">${isTechEmail(w.email)?'📱 '+esc(w.email.replace(TECH_DOMAIN,'')):esc(w.email)}</td>
       <td dir="ltr" style="text-align:right">${esc(w.phone||'—')}</td>
       <td>${w.id===u.id?ROLES[w.role]+' (אתה)':`<select style="width:auto;padding:6px 10px;font-size:13px" onchange="setRole('${w.id}',this.value)">
         ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${w.role===k?'selected':''}>${v}</option>`).join('')}</select>`}</td>
-      <td>${w.id!==u.id?(isTechEmail(w.email)
-        ?`<button class="btn btn-outline btn-sm" onclick="tempResetPass('${w.id}')">סיסמה זמנית</button>`
-        :`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס סיסמה</button>`):''}</td>
+      <td>${w.active===false?'<span class="chip chip-late">מושבת</span>':'<span class="chip chip-done">פעיל</span>'}</td>
+      <td style="white-space:nowrap">${w.id!==u.id?`
+        ${w.active===false
+          ?`<button class="btn btn-success btn-sm" onclick="toggleActive('${w.id}',true)">הפעלה מחדש</button>
+             <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser('${w.id}')">🗑 מחיקה</button>`
+          :`${isTechEmail(w.email)
+              ?`<button class="btn btn-outline btn-sm" onclick="tempResetPass('${w.id}')">סיסמה זמנית</button>`
+              :`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס</button>`}
+             <button class="btn btn-warn btn-sm" onclick="toggleActive('${w.id}',false)">השבתה</button>`}
+      `:''}</td>
     </tr>`).join('')}</table>
   </div>`;
 }
@@ -1261,6 +1274,54 @@ async function setRole(id,role){
   const {error}=await sb.from('profiles').update({role}).eq('id',id);
   if(error){ errToast(error); render(); return; }
   const w=userById(id); w.role=role; toast(w.name+' עודכן ל'+ROLES[role]); render();
+}
+
+/* ---------- השבתה / הפעלה / מחיקה ---------- */
+async function toggleActive(id,active){
+  const w=userById(id);
+  if(!active){
+    const open=DB.tickets.filter(t=>t.assignedTo===id&&t.status!=='done');
+    if(open.length){
+      showModal(`<h2>⚠️ השבתת ${esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
+        <div class="alert alert-err">לעובד יש ${open.length} פניות פתוחות. מומלץ להעביר אותן לגורם אחר לפני ההשבתה (דרך כרטיס כל פניה), אחרת הן יישארו ללא מטפל זמין.</div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-warn" style="flex:1" onclick="doToggleActive('${id}',false)">להשבית בכל זאת</button>
+          <button class="btn btn-outline" style="flex:1" onclick="closeModal()">ביטול</button>
+        </div>`);
+      return;
+    }
+  }
+  doToggleActive(id,active);
+}
+async function doToggleActive(id,active){
+  const {error}=await sb.from('profiles').update({active}).eq('id',id);
+  if(error){ errToast(error); return; }
+  const w=userById(id); w.active=active;
+  closeModal(); render();
+  toast(w.name+(active?' הופעל מחדש':' הושבת — לא יוכל להתחבר או לעדכן פניות'));
+}
+function confirmDeleteUser(id){
+  const w=userById(id);
+  showModal(`<h2>🗑 מחיקת ${esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-err">המחיקה סופית ואינה ניתנת לשחזור. אם לעובד יש היסטוריית פניות במערכת — המחיקה תיחסם אוטומטית (יש להשאירו מושבת כדי לשמור על הנתונים).</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-danger" style="flex:1" onclick="doDeleteUser('${id}')">מחיקה סופית</button>
+      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">ביטול</button>
+    </div>`);
+}
+async function doDeleteUser(id){
+  const w=userById(id);
+  const {error}=await sb.rpc('admin_delete_user',{target_user:id});
+  if(error){
+    closeModal();
+    if(/function .*admin_delete_user.* does not exist/i.test(error.message))
+      toast('יש להריץ קודם את תוספת ה-SQL לניהול משתמשים');
+    else if(/היסטוריית פניות/.test(error.message))
+      toast('למשתמש יש היסטוריה — נשאר מושבת במקום להימחק');
+    else errToast(error);
+    return;
+  }
+  await loadAll(); closeModal(); render(); toast('המשתמש '+w.name+' נמחק');
 }
 async function sendResetMail(id){
   const w=userById(id);
