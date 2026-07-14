@@ -540,6 +540,12 @@ function vRegister(){
       :`<div class="field"><label class="req" for="rg_email">דוא"ל</label><input type="email" id="rg_email" dir="ltr" style="text-align:left" autocomplete="username"></div>
         <div class="field"><label for="rg_phone">טלפון</label><input type="tel" id="rg_phone" dir="ltr" style="text-align:left" autocomplete="tel"></div>`}
     ${pwField('rg_pass','סיסמה','new-password')}
+    <div class="field"><label>באילו ישובים אתה פועל? (אפשר לסמן כמה; ללא סימון — כולם)</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        ${CITIES.map(c=>`<label style="display:flex;align-items:center;gap:5px;font-weight:400;border:1.5px solid var(--border);border-radius:99px;padding:5px 12px;cursor:pointer;font-size:13.5px">
+          <input type="checkbox" data-rgcity="${c}" style="width:auto"> ${c}</label>`).join('')}
+      </div>
+      <div class="hint">ההגדרה משפיעה על אילו משימות יוצעו לשיוך אליך; מנהל המערכת יכול לעדכן אותה בהמשך.</div></div>
     <button class="btn btn-primary btn-block" id="rg_btn" onclick="doRegister()">הרשמה</button>
     <div style="margin-top:14px;text-align:center"><a class="link" href="javascript:route('login')">יש לך חשבון? התחברות</a></div>
   </div></div></div>`;
@@ -569,7 +575,13 @@ async function doRegister(){
     return;
   }
   const np=normPhone(phone);
-  if(np){ for(let i=0;i<5;i++){ const {error:e}=await sb.from('profiles').update({phone:np}).eq('id',data.session.user.id); if(!e) break; await new Promise(r=>setTimeout(r,600)); } }
+  const rgCities=[...document.querySelectorAll('[data-rgcity]')].filter(c=>c.checked).map(c=>c.dataset.rgcity);
+  const upd={};
+  if(np) upd.phone=np;
+  if(rgCities.length) upd.cities=rgCities;
+  if(Object.keys(upd).length){
+    for(let i=0;i<5;i++){ const {error:e}=await sb.from('profiles').update(upd).eq('id',data.session.user.id); if(!e) break; await new Promise(r=>setTimeout(r,600)); }
+  }
   await afterAuth(); toast('נרשמת בהצלחה — הוגדרת כאיש שטח');
 }
 
