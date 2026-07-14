@@ -205,12 +205,21 @@ let RECOVERY=false;             /* חזרה מקישור איפוס סיסמה *
 
 /* ---------- קבועים (זהים לגרסה הקודמת) ---------- */
 const CITIES=['נצרת','ריינה','יפיע','איכסל','עילוט'];
-const ROLES={super:'מנהל על', manager:'מנהלן', field:'איש שטח'};
+const ROLES={super:'מנהל על', manager:'מנהלן', field:'איש שטח', contractor:'קבלן'};
+const isMgr=u=>u&&(u.role==='super'||u.role==='manager');
+const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor');
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
 const TYPES={
   W:['נזילה / פיצוץ מים','החלפת מונה שבור','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
   G:['אי החזרת המצב לקדמותו']
+};
+const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה'};
+const TYPE_AREA={
+ 'נזילה / פיצוץ מים':'faults','גלישת ביוב':'faults','שבר בשוחה / במכסה שוחה':'faults',
+ 'תלונה על ריח':'faults','הפסקת מים':'faults','תלונה על איכות מים':'faults','אחר':'faults',
+ 'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters',
+ 'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections'
 };
 const STATUSES={open:'פתוחה',progress:'בטיפול',done:'הושלמה'};
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',done:'chip-done'};
@@ -240,6 +249,31 @@ const userById=id=>DB.users.find(u=>u.id===id);
 const userName=id=>userById(id)?.name||'—';
 const currentUser=()=>ME;
 const activeUsers=()=>DB.users.filter(u=>u.active!==false);
+/* גורמים רלוונטיים לפי ישוב ותחום הסוג: ללא שיוך = מופיע בכולם */
+function usersForTicket(city,type,showAll){
+  let list=activeUsers();
+  if(showAll) return list;
+  if(city) list=list.filter(u=>!(u.cities&&u.cities.length)||u.cities.includes(city));
+  const area=TYPE_AREA[type];
+  if(area) list=list.filter(u=>!(u.workAreas&&u.workAreas.length)||u.workAreas.includes(area));
+  return list;
+}
+let NT_ALL=false;
+function assignOpts(city,type,selId,withNone){
+  let list=usersForTicket(city,type,NT_ALL);
+  /* אם הסינון ריקן את הרשימה - מציגים את כולם כדי לא לחסום את הטופס */
+  if(!list.length) list=activeUsers();
+  const opts=list.map(w=>`<option value="${w.id}" ${w.id===selId?'selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('');
+  return (withNone?'<option value="">ללא — גורם מטפל אחד</option>':'')+opts;
+}
+function rebuildAssign(){
+  const city=$('#nt_city').value, type=$('#nt_type').value;
+  const a=$('#nt_assign'), p=$('#nt_parallel');
+  if(a) a.innerHTML=assignOpts(city,type,a.value,false);
+  if(p){ const cur=p.value; p.innerHTML=assignOpts(city,type,cur,true); }
+  const b=$('#nt_all_btn');
+  if(b) b.textContent=NT_ALL?'🎯 הצג רק גורמים רלוונטיים':'👥 הצג את כל הגורמים';
+}
 
 /* ---------- סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים ---------- */
 function passChecks(p){ return { len:p.length>=8, eng:/[A-Za-z]/.test(p), num:/[0-9]/.test(p) }; }
@@ -311,7 +345,7 @@ async function loadAll(){
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
     ph.data.forEach(p=>{ (photosBy[p.ticket_id]??={before:[],after:[]})[p.kind].push({id:p.id,path:p.path,url:urlMap[p.path]||''}); });
 
-    DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active}));
+    DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active,cities:p.cities||[],workAreas:p.work_areas||[]}));
     DB.tickets=tk.data.map(t=>({
       id:t.id, number:t.number, domain:t.domain, type:t.type, city:t.city, address:t.address||'',
       customerName:t.customer_name||'', customerId:t.customer_id||'', customerPhone:t.customer_phone||'',
@@ -323,7 +357,7 @@ async function loadAll(){
       workLog:t.work_log||'',
       gps:t.gps_lat!=null?{lat:t.gps_lat,lng:t.gps_lng,at:t.gps_at?+new Date(t.gps_at):null}:null,
       completedAt:t.completed_at?+new Date(t.completed_at):null,
-      foundByField:t.found_by_field,
+      foundByField:t.found_by_field, linkedTicketId:t.linked_ticket_id||null,
       outage:t.outage_hours?{area:t.outage_area||'',durationHours:+t.outage_hours}:null,
       history:histBy[t.id]||[],
       photosBefore:(photosBy[t.id]||{}).before||[],
@@ -606,9 +640,9 @@ async function logout(){ await sb.auth.signOut(); ME=null; route('landing'); }
 /* ================= מעטפת ================= */
 function vShell(u){
   const tabs=[['home','🏠 ראשי'],['tickets','📋 פניות']];
-  if(u.role!=='field') tabs.push(['newTicket','➕ פניה חדשה']);
+  if(isMgr(u)) tabs.push(['newTicket','➕ פניה חדשה']);
   tabs.push(['map','🗺️ מפה']);
-  if(u.role!=='field') tabs.push(['board','📊 לוח בקרה'],['reports','📈 דוחות']);
+  if(isMgr(u)) tabs.push(['board','📊 לוח בקרה'],['reports','📈 דוחות']);
   if(u.role==='super') tabs.push(['users','👥 משתמשים']);
   return `
   <div class="topbar"><div class="wrap">
@@ -632,7 +666,7 @@ function renderInner(u){
     case 'home': el.innerHTML=vHome(u); break;
     case 'tickets': el.innerHTML=vTickets(u); break;
     case 'ticket': el.innerHTML=vTicket(u,VIEW.arg); startLiveTimers(); initTicketMap(VIEW.arg); break;
-    case 'newTicket': el.innerHTML=vNewTicket(u); break;
+    case 'newTicket': NT_ALL=false; el.innerHTML=vNewTicket(u); break;
     case 'map': el.innerHTML='<div class="card"><div class="section-t">🗺️ מפת פניות פתוחות</div><div id="bigmap" class="map-box" style="height:70dvh"></div></div>'; initBigMap(); break;
     case 'board': el.innerHTML=vBoard(u); break;
     case 'reports': el.innerHTML=vReports(u); break;
@@ -689,6 +723,9 @@ function vHome(u){
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-water" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
     <button class="btn btn-danger" style="padding:16px" onclick="openOutage()">🚱 דיווח הפסקת מים</button>
+  </div>`:u.role==='contractor'?`
+  <div style="margin-bottom:20px">
+    <button class="btn btn-water btn-block" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
   </div>`:`
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-primary" style="padding:16px" onclick="route('newTicket')">➕ פתיחת פניה חדשה</button>
@@ -711,6 +748,7 @@ function trow(t){
       <span class="chip ${STATUS_CHIP[t.status]}">${STATUSES[t.status]}</span>
       ${late&&t.status!=='done'?'<span class="chip chip-late">⏰ חריגה מיעד</span>':''}
       ${t.outage?'<span class="chip chip-late">🚱 הפסקת מים</span>':''}
+      ${t.linkedTicketId?'<span class="chip chip-transfer">🔗 מקבילה</span>':''}
     </div>
     <div style="font-weight:700;font-size:14.5px;margin-bottom:3px">${esc(t.type)} · ${esc(t.city)}</div>
     <div class="desc">${esc(t.description)||'ללא תיאור'}</div>
@@ -743,6 +781,7 @@ function vTickets(u){
 function visibleTickets(u){
   let list=[...DB.tickets];
   if(u.role==='field') list=list.filter(t=>t.assignedTo===u.id||t.history.some(h=>h.by===u.id));
+  /* לקבלן השרת מחזיר ממילא רק את הפניות שלו והמקבילות להן */
   return list;
 }
 function applyFilters(){
@@ -766,10 +805,10 @@ function vNewTicket(u){
     <div class="alert alert-info">מספר הפניה יוקצה אוטומטית בשרת: W (מים) / S (ביוב) / G (כללי) + שנה + חודש + מספר רץ.</div>
     <div class="grid grid-2">
       <div class="field"><label class="req">סיווג על</label>
-        <select id="nt_domain" onchange="$('#nt_type').innerHTML=typeOptions(this.value)">
+        <select id="nt_domain" onchange="$('#nt_type').innerHTML=typeOptions(this.value);rebuildAssign()">
           <option value="W">מים (W)</option><option value="S">ביוב (S)</option><option value="G">כללי (G)</option>
         </select></div>
-      <div class="field"><label class="req">סוג פניה</label><select id="nt_type">${typeOptions('W')}</select></div>
+      <div class="field"><label class="req">סוג פניה</label><select id="nt_type" onchange="rebuildAssign()">${typeOptions('W')}</select></div>
     </div>
     <div class="grid grid-2">
       <div class="field"><label class="req">שם לקוח</label><input id="nt_cname"></div>
@@ -777,13 +816,17 @@ function vNewTicket(u){
     </div>
     <div class="grid grid-2">
       <div class="field"><label class="req">טלפון</label><input id="nt_phone" type="tel" dir="ltr" style="text-align:left"></div>
-      <div class="field"><label class="req">ישוב / עיר</label><select id="nt_city">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      <div class="field"><label class="req">ישוב / עיר</label><select id="nt_city" onchange="rebuildAssign()">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label class="req">שיוך לגורם מטפל</label>
-      <select id="nt_assign">${activeUsers().map(w=>`<option value="${w.id}" ${w.id===u.id?'selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
-      <div class="hint">הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
+      <select id="nt_assign">${assignOpts(CITIES[0],TYPES['W'][0],u.id,false)}</select>
+      <div style="margin-top:6px"><button type="button" class="btn btn-outline btn-sm" id="nt_all_btn" onclick="NT_ALL=!NT_ALL;rebuildAssign()">👥 הצג את כל הגורמים</button></div>
+      <div class="hint">מוצגים הגורמים הרלוונטיים לישוב ולסוג הפניה שנבחרו. הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
+    <div class="field"><label>שיוך מקביל לגורם נוסף (אופציונלי)</label>
+      <select id="nt_parallel">${assignOpts(CITIES[0],TYPES['W'][0],'',true)}</select>
+      <div class="hint">לעבודה במקביל (למשל עובד שטח + קבלן): ייפתחו שתי פניות מקושרות, לכל גורם כרטיס משלו עם תיעוד וסגירה נפרדים, וכל אחד יראה מי הגורם המקביל.</div></div>
     <div class="field"><label>זמן יעד (SLA)</label>
       <input value="נקבע אוטומטית בשרת לפי סוג הפניה" disabled>
       <div class="hint">מנהל יכול לשנות את היעד בדף הפניה לאחר הפתיחה. לאיש שטח השדה קריא בלבד.</div></div>
@@ -793,16 +836,38 @@ function vNewTicket(u){
 async function doNewTicket(){
   const cname=$('#nt_cname').value.trim(), phone=$('#nt_phone').value.trim(), addr=$('#nt_addr').value.trim();
   if(!cname||!phone||!addr){ toast('יש למלא שם לקוח, טלפון וכתובת'); return; }
+  const primary=$('#nt_assign').value, parallel=$('#nt_parallel').value;
+  if(parallel && parallel===primary){ toast('הגורם המקביל חייב להיות שונה מהגורם הראשי'); return; }
   const btn=$('#nt_btn'); btn.disabled=true; btn.textContent='פותח פניה…';
   try{
-    const t=await createTicketCloud({
+    const base={
       domain:$('#nt_domain').value, type:$('#nt_type').value, city:$('#nt_city').value,
       customerName:cname, customerId:$('#nt_cid').value.trim(), customerPhone:phone,
-      address:addr, description:$('#nt_desc').value.trim(), assignedTo:$('#nt_assign').value
-    });
-    await loadAll(); toast('נפתחה פניה '+t.number); route('ticket',t.id);
-    if(t.assigned_to!==ME.id) setTimeout(()=>offerWhatsApp(t.id,t.assigned_to),400);
+      address:addr, description:$('#nt_desc').value.trim()
+    };
+    const t=await createTicketCloud({...base, assignedTo:primary});
+    let twin=null;
+    if(parallel){
+      twin=await createTicketCloud({...base, assignedTo:parallel});
+      await sb.rpc('link_tickets',{t1:t.id,t2:twin.id});
+      await addHistory(t.id,'פתיחה במקביל','מקושרת לפניה '+twin.number+' אצל '+userName(parallel));
+      await addHistory(twin.id,'פתיחה במקביל','מקושרת לפניה '+t.number+' אצל '+userName(primary));
+    }
+    await loadAll();
+    toast(twin?'נפתחו פניות מקבילות '+t.number+' + '+twin.number:'נפתחה פניה '+t.number);
+    route('ticket',t.id);
+    if(twin) setTimeout(()=>offerWhatsAppPair(t.id,primary,twin.id,parallel),400);
+    else if(t.assigned_to!==ME.id) setTimeout(()=>offerWhatsApp(t.id,t.assigned_to),400);
   }catch(e){ btn.disabled=false; btn.textContent='פתיחת פניה'; errToast(e); }
+}
+/* הצעת עדכון בוואטסאפ לשני הגורמים בפתיחה מקבילה */
+function offerWhatsAppPair(id1,u1,id2,u2){
+  const w1=userById(u1), w2=userById(u2);
+  showModal(`<h2>📲 לעדכן את שני הגורמים בוואטסאפ? <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">נפתחו שתי פניות מקבילות. כל גורם יקבל את הכרטיס שלו.</div>
+    ${u1!==ME.id?`<button class="btn btn-success btn-block" style="margin-bottom:8px" onclick="waShare('${id1}','${u1}')">📲 שליחה אל ${esc(w1.name)}</button>`:''}
+    ${u2!==ME.id?`<button class="btn btn-success btn-block" style="margin-bottom:8px" onclick="waShare('${id2}','${u2}')">📲 שליחה אל ${esc(w2.name)}</button>`:''}
+    <button class="btn btn-outline btn-block" onclick="closeModal()">סגירה</button>`);
 }
 
 /* ---------- "מצאתי תקלה" ---------- */
@@ -951,6 +1016,23 @@ function vTicket(u,id){
       </div>
     </div>
   </div>
+
+  ${t.linkedTicketId?(()=>{
+    const lt=ticketById(t.linkedTicketId);
+    if(!lt) return '<div class="alert alert-info">🔗 לפניה זו קיימת פניה מקבילה אצל גורם נוסף.</div>';
+    const lateL=slaState(lt)==='late';
+    return `<div class="card" style="margin-bottom:14px;border-inline-start:4px solid var(--transfer)">
+      <div class="section-t">🔗 פניה מקבילה — עבודה בשני גורמים</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="tnum" dir="ltr">${lt.number}</span>
+        <span>אצל <b>${esc(userName(lt.assignedTo))}</b> (${ROLES[userById(lt.assignedTo)?.role]||''})</span>
+        <span class="chip ${STATUS_CHIP[lt.status]}">${STATUSES[lt.status]}</span>
+        ${lateL&&lt.status!=='done'?'<span class="chip chip-late">⏰ חריגה</span>':''}
+        <button class="btn btn-outline btn-sm" onclick="route('ticket','${lt.id}')">פתיחת הכרטיס המקביל</button>
+      </div>
+      <div class="hint" style="margin-top:6px">כל גורם מטפל ומתעד בכרטיס שלו בנפרד; הסטטוס כאן מציג את התקדמות הגורם המקביל.</div>
+    </div>`;
+  })():''}
 
   ${editable&&t.status!=='done'?`
   <div class="card" style="margin-bottom:14px">
@@ -1252,7 +1334,7 @@ function vUsers(u){
     <div class="alert alert-info">כל נרשם חדש מוגדר תחילה כ<b>איש שטח</b>. כאן ניתן להוסיף משתמשים ביוזמתך, לשדרג הרשאות ולשלוח מייל איפוס סיסמה.</div>
     <table class="rep"><tr><th>שם</th><th>זיהוי כניסה</th><th>טלפון</th><th>הרשאה</th><th>מצב</th><th></th></tr>
     ${DB.users.map(w=>`<tr style="${w.active===false?'opacity:.55':''}">
-      <td><b>${esc(w.name)}</b></td>
+      <td><b>${esc(w.name)}</b><div class="hint" style="margin-top:2px">🏘 ${w.cities&&w.cities.length?esc(w.cities.join(', ')):'כל הישובים'} · 🎯 ${w.workAreas&&w.workAreas.length?esc(w.workAreas.map(a=>WORK_AREAS[a]||a).join(', ')):'כל התחומים'}</div></td>
       <td dir="ltr" style="text-align:right">${isTechEmail(w.email)?'📱 '+esc(w.email.replace(TECH_DOMAIN,'')):esc(w.email)}</td>
       <td dir="ltr" style="text-align:right">${esc(w.phone||'—')}</td>
       <td>${w.id===u.id?ROLES[w.role]+' (אתה)':`<select style="width:auto;padding:6px 10px;font-size:13px" onchange="setRole('${w.id}',this.value)">
@@ -1265,11 +1347,41 @@ function vUsers(u){
           :`${isTechEmail(w.email)
               ?`<button class="btn btn-outline btn-sm" onclick="tempResetPass('${w.id}')">סיסמה זמנית</button>`
               :`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס</button>`}
+             <button class="btn btn-outline btn-sm" onclick="editCities('${w.id}')">🎯 שיוך</button>
              <button class="btn btn-warn btn-sm" onclick="toggleActive('${w.id}',false)">השבתה</button>`}
       `:''}</td>
     </tr>`).join('')}</table>
   </div>`;
 }
+/* ---------- עריכת שיוך המשתמש: ישובים + תחומי טיפול ---------- */
+function editCities(id){
+  const w=userById(id);
+  showModal(`<h2>🎯 שיוך ${esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">בפתיחת פניה יוצגו רק גורמים התואמים לישוב ולסוג הפניה. ללא סימון בקטגוריה — המשתמש מופיע בכולה.</div>
+    <div style="font-weight:700;color:var(--primary);margin-bottom:4px">🏘 ישובים</div>
+    ${CITIES.map(c=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" data-city="${c}" ${w.cities&&w.cities.includes(c)?'checked':''} style="width:auto"> ${c}
+    </label>`).join('')}
+    <div style="font-weight:700;color:var(--primary);margin:14px 0 4px">🎯 תחומי טיפול</div>
+    ${Object.entries(WORK_AREAS).map(([k,v])=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" data-area="${k}" ${w.workAreas&&w.workAreas.includes(k)?'checked':''} style="width:auto"> ${v}
+    </label>`).join('')}
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveCities('${id}')">שמירה</button>`);
+}
+async function saveCities(id){
+  const cities=[...document.querySelectorAll('[data-city]')].filter(c=>c.checked).map(c=>c.dataset.city);
+  const work_areas=[...document.querySelectorAll('[data-area]')].filter(c=>c.checked).map(c=>c.dataset.area);
+  const {error}=await sb.from('profiles').update({cities,work_areas}).eq('id',id);
+  if(error){
+    if(/column .*(cities|work_areas).* does not exist/i.test(error.message)) toast('יש להריץ קודם את תוספות ה-SQL של הישובים והתחומים');
+    else errToast(error);
+    return;
+  }
+  const w=userById(id); w.cities=cities; w.workAreas=work_areas;
+  closeModal(); render();
+  toast(w.name+' עודכן');
+}
+
 async function setRole(id,role){
   const {error}=await sb.from('profiles').update({role}).eq('id',id);
   if(error){ errToast(error); render(); return; }
