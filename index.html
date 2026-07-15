@@ -316,8 +316,9 @@ function offerWhatsApp(ticketId,toUserId){
   if(!t||!to||to.id===ME.id) return;
   showModal(`<h2>📲 לעדכן את ${esc(to.name)} בוואטסאפ? <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-info">הפניה <b dir="ltr">${t.number}</b> שויכה אל ${esc(to.name)}. ${to.phone?'אפשר לשלוח לו עכשיו הודעת וואטסאפ עם פרטי הפניה וקישור ישיר.':'לא רשום לו מספר טלפון — ההודעה תיפתח לבחירת נמען.'}</div>
-    <div style="display:flex;gap:10px">
-      <button class="btn btn-success" style="flex:1" onclick="waShare('${ticketId}','${toUserId}');closeModal()">📲 שליחה בוואטסאפ</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-success" style="flex:1" onclick="waShare('${ticketId}','${toUserId}');closeModal()">📲 שליחה אל ${esc(to.name)}</button>
+      <button class="btn" style="flex:1;background:#128C7E;color:#fff" onclick="waShare('${ticketId}');closeModal()">📤 שליחה לקבוצה</button>
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">לא הפעם</button>
     </div>`);
 }
@@ -879,6 +880,7 @@ function offerWhatsAppPair(id1,u1,id2,u2){
     <div class="alert alert-info">נפתחו שתי פניות מקבילות. כל גורם יקבל את הכרטיס שלו.</div>
     ${u1!==ME.id?`<button class="btn btn-success btn-block" style="margin-bottom:8px" onclick="waShare('${id1}','${u1}')">📲 שליחה אל ${esc(w1.name)}</button>`:''}
     ${u2!==ME.id?`<button class="btn btn-success btn-block" style="margin-bottom:8px" onclick="waShare('${id2}','${u2}')">📲 שליחה אל ${esc(w2.name)}</button>`:''}
+    <button class="btn btn-block" style="background:#128C7E;color:#fff;margin-bottom:8px" onclick="waShare('${id1}')">📤 שליחה לקבוצה</button>
     <button class="btn btn-outline btn-block" onclick="closeModal()">סגירה</button>`);
 }
 
@@ -986,7 +988,7 @@ function vTicket(u,id){
   return `
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="btn btn-outline btn-sm" onclick="route('tickets')">→ חזרה לרשימה</button>
-    <button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="waShare('${t.id}')">📲 שיתוף בוואטסאפ</button>
+    <button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="waShare('${t.id}')" title="נפתח עם ההודעה מוכנה — בוחרים איש קשר או קבוצה ושולחים">📲 וואטסאפ — לאיש קשר או לקבוצה</button>
   </div>
   <div class="card" style="margin-bottom:14px">
     <div class="detail-head">
