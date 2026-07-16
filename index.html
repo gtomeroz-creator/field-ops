@@ -366,6 +366,7 @@ async function loadAll(){
     }));
     OFFLINE=false;
     try{ checkNewAssignments(); }catch(e){}
+    try{ checkEndOfDay(); }catch(e){}
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
   }catch(e){
     /* מצב לא מקוון: מציגים את הנתונים האחרונים שנשמרו במכשיר */
@@ -397,10 +398,29 @@ function notifyUser(title,body,ticketId){
   const N=window.Notification;
   if(N && N.permission==='granted'){
     try{
-      const n=new N(title,{body,tag:'ticket-'+ticketId});
-      n.onclick=()=>{ window.focus(); route('ticket',ticketId); n.close(); };
+      const n=new N(title,{body,tag:ticketId?'ticket-'+ticketId:'hari-eod'});
+      n.onclick=()=>{ window.focus(); if(ticketId) route('ticket',ticketId); else route('tickets','open'); n.close(); };
     }catch(e){}
   }
+}
+
+/* ---------- תזכורת סוף יום: פניות פתוחות שטרם נסגרו ---------- */
+let EOD_HOUR=16; /* שעת התזכורת (16:00) */
+function checkEndOfDay(){
+  if(!ME) return;
+  const now=new Date();
+  if(now.getHours()<EOD_HOUR) return;
+  const key='hari_eod_'+ME.id+'_'+now.toDateString();
+  if(store.get(key)) return;               /* פעם אחת ביום לכל משתמש במכשיר */
+  store.set(key,'1');
+  const open=DB.tickets.filter(t=>t.assignedTo===ME.id&&t.status!=='done');
+  if(!open.length) return;
+  const late=open.filter(t=>Date.now()>t.dueAt).length;
+  notifyUser(
+    '⏰ תזכורת סוף יום — '+open.length+' פניות פתוחות',
+    'יש לך '+open.length+' פניות שטרם נסגרו'+(late?', מהן '+late+' בחריגה מיעד':'')+'. לחץ לצפייה והשלמת הטיפול.',
+    null
+  );
 }
 function notifState(){
   const N=window.Notification;
@@ -1361,6 +1381,7 @@ function vUsers(u){
           :`${isTechEmail(w.email)
               ?`<button class="btn btn-outline btn-sm" onclick="tempResetPass('${w.id}')">סיסמה זמנית</button>`
               :`<button class="btn btn-outline btn-sm" onclick="sendResetMail('${w.id}')">מייל איפוס</button>`}
+             <button class="btn btn-outline btn-sm" onclick="openEditUser('${w.id}')">✏️ עריכה</button>
              <button class="btn btn-outline btn-sm" onclick="editCities('${w.id}')">🎯 שיוך</button>
              <button class="btn btn-warn btn-sm" onclick="toggleActive('${w.id}',false)">השבתה</button>`}
       `:''}</td>
@@ -1394,6 +1415,56 @@ async function saveCities(id){
   const w=userById(id); w.cities=cities; w.workAreas=work_areas;
   closeModal(); render();
   toast(w.name+' עודכן');
+}
+
+/* ---------- עריכת פרטי משתמש (מנהל-על) ---------- */
+function openEditUser(id){
+  const w=userById(id), tech=isTechEmail(w.email);
+  showModal(`<h2>✏️ עריכת ${esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
+    <div id="msg"></div>
+    <div class="field"><label class="req">שם מלא</label><input id="eu_name" value="${esc(w.name)}"></div>
+    ${tech
+      ?`<div class="field"><label class="req">מספר טלפון (משמש לכניסה)</label>
+          <input id="eu_phone" type="tel" dir="ltr" style="text-align:left" inputmode="numeric" value="${esc(w.phone||w.email.replace(TECH_DOMAIN,''))}">
+          <div class="hint">שינוי המספר מעדכן גם את פרטי הכניסה — העובד ייכנס מעתה עם המספר החדש (הסיסמה נשארת).</div></div>`
+      :`<div class="field"><label class="req">דוא"ל (משמש לכניסה)</label>
+          <input id="eu_email" type="email" dir="ltr" style="text-align:left" value="${esc(w.email)}">
+          <div class="hint">שינוי הכתובת מעדכן את פרטי הכניסה — העובד ייכנס מעתה עם הכתובת החדשה (הסיסמה נשארת).</div></div>
+        <div class="field"><label>טלפון</label><input id="eu_phone" type="tel" dir="ltr" style="text-align:left" value="${esc(w.phone||'')}"></div>`}
+    <button class="btn btn-primary btn-block" id="eu_btn" onclick="saveEditUser('${id}',${tech})">שמירת שינויים</button>`);
+}
+async function saveEditUser(id,tech){
+  const w=userById(id), m=$('#msg'), btn=$('#eu_btn');
+  const name=$('#eu_name').value.trim(), phone=normPhone($('#eu_phone')?.value||'');
+  if(!name){ m.innerHTML='<div class="alert alert-err">יש למלא שם.</div>'; return; }
+  btn.disabled=true; btn.textContent='שומר…';
+  try{
+    let newEmail=null;
+    if(tech){
+      if(!phoneValid(phone)) throw new Error('מספר טלפון לא תקין (למשל 0501234567)');
+      const t=phoneToEmail(phone);
+      if(t!==w.email) newEmail=t;
+    }else{
+      const em=$('#eu_email').value.trim().toLowerCase();
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) throw new Error('כתובת דוא"ל לא תקינה');
+      if(em!==w.email.toLowerCase()) newEmail=em;
+    }
+    if(newEmail){
+      const {error}=await sb.rpc('admin_update_user_email',{target_user:id,new_email:newEmail});
+      if(error){
+        if(/does not exist/i.test(error.message)) throw new Error('יש להריץ קודם את תוספת ה-SQL לעריכת משתמשים');
+        throw error;
+      }
+      w.email=newEmail;
+    }
+    const {error:e2}=await sb.from('profiles').update({name,phone}).eq('id',id);
+    if(e2) throw e2;
+    w.name=name; w.phone=phone;
+    closeModal(); render(); toast('הפרטים של '+name+' עודכנו');
+  }catch(e){
+    btn.disabled=false; btn.textContent='שמירת שינויים';
+    m.innerHTML=`<div class="alert alert-err">${esc(e.message)}</div>`;
+  }
 }
 
 async function setRole(id,role){
@@ -1553,6 +1624,7 @@ sb.auth.onAuthStateChange((event)=>{
 })();
 /* רענון נתונים שקט כל דקה במסכי צפייה (לא בטפסים) */
 setInterval(async()=>{
+  try{ checkEndOfDay(); }catch(e){}
   if(ME&&['home','tickets','board','reports','map'].includes(VIEW.name)&&!document.querySelector('.modal-bg')){
     await loadAll(); render();
   }
