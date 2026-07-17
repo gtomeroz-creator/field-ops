@@ -1242,12 +1242,15 @@ async function transferTicket(id,toId){
 /* ---------- מחיקת פניה (מנהל-על בלבד) ---------- */
 function confirmDeleteTicket(id){
   const t=ticketById(id);
-  if(t.linkedTicketId){
-    toast('לפניה זו יש פניה מקבילה מקושרת — יש למחוק קודם את המקבילה');
-    return;
-  }
+  const lt=t.linkedTicketId?ticketById(t.linkedTicketId):null;
   showModal(`<h2>🗑 מחיקת פניה ${t.number} <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-err">המחיקה סופית: הפניה, ההיסטוריה וכל התמונות יימחקו לצמיתות. מיועד לפניות הדגמה, כפילויות ופתיחות בטעות בלבד. מספר הפניה יתועד ביומן המחיקות ולא ימוחזר.</div>
+    ${lt?`<div class="alert alert-info">🔗 לפניה זו מקושרת פניה מקבילה <b dir="ltr">${lt.number}</b> (אצל ${esc(userName(lt.assignedTo))}). בחר האם למחוק את שתיהן יחד, או רק את הנוכחית — ואז המקבילה תנותק ותהפוך לפניה עצמאית.</div>
+    <div class="field"><label class="req">היקף המחיקה</label>
+      <select id="dt_scope">
+        <option value="both">מחיקת שתי הפניות המקבילות (${t.number} + ${lt.number})</option>
+        <option value="one">מחיקת ${t.number} בלבד — ${lt.number} תישאר ותנותק</option>
+      </select></div>`:''}
     <div class="field"><label class="req">לאישור, הקלד את מספר הפניה: <b dir="ltr">${t.number}</b></label>
       <input id="dt_confirm" dir="ltr" style="text-align:left" autocomplete="off"></div>
     <div class="field"><label>סיבת המחיקה (יתועד ביומן)</label>
@@ -1260,21 +1263,32 @@ async function doDeleteTicket(id){
     toast('מספר הפניה שהוקלד אינו תואם — המחיקה בוטלה');
     return;
   }
+  const scope=$('#dt_scope')?.value||'one';
+  const reason=$('#dt_reason').value;
   btn.disabled=true; btn.textContent='מוחק…';
-  const {data:paths,error}=await sb.rpc('admin_delete_ticket',{target_ticket:id,del_reason:$('#dt_reason').value});
-  if(error){
+  let allPaths=[];
+  try{
+    /* מחיקת המקבילה תחילה, אם נבחר "שתיהן" */
+    if(scope==='both'&&t.linkedTicketId){
+      const {data:p2,error:e2}=await sb.rpc('admin_delete_ticket',{target_ticket:t.linkedTicketId,del_reason:reason+' (מחיקה זוגית)'});
+      if(e2) throw e2;
+      allPaths.push(...(p2||[]));
+    }
+    const {data:p1,error:e1}=await sb.rpc('admin_delete_ticket',{target_ticket:id,del_reason:reason});
+    if(e1) throw e1;
+    allPaths.push(...(p1||[]));
+  }catch(error){
     btn.disabled=false; btn.textContent='מחיקה סופית';
-    if(/does not exist/i.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL למחיקת פניות');
-    else if(/מקבילה/.test(error.message)) toast('קיימת פניה מקבילה — יש למחוק אותה קודם');
+    if(/does not exist/i.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL למחיקת פניות (הגרסה המעודכנת)');
     else errToast(error);
     return;
   }
   /* ניקוי קובצי התמונות מהאחסון */
-  if(paths&&paths.length){
-    try{ await sb.storage.from('ticket-photos').remove(paths); }catch(e){}
+  if(allPaths.length){
+    try{ await sb.storage.from('ticket-photos').remove(allPaths); }catch(e){}
   }
   await loadAll(); closeModal(); route('tickets');
-  toast('הפניה '+t.number+' נמחקה ותועדה ביומן');
+  toast(scope==='both'?'שתי הפניות המקבילות נמחקו ותועדו ביומן':'הפניה '+t.number+' נמחקה; המקבילה נותקה והפכה עצמאית');
 }
 
 function openTransfer(id){
