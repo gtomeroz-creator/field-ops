@@ -1050,6 +1050,7 @@ function vTicket(u,id){
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="btn btn-outline btn-sm" onclick="route('tickets')">→ חזרה לרשימה</button>
     <button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="waShare('${t.id}')" title="נפתח עם ההודעה מוכנה — בוחרים איש קשר או קבוצה ושולחים">📲 וואטסאפ — לאיש קשר או לקבוצה</button>
+    ${u.role==='super'?`<button class="btn btn-danger btn-sm" onclick="confirmDeleteTicket('${t.id}')">🗑 מחיקת פניה</button>`:''}
   </div>
   <div class="card" style="margin-bottom:14px">
     <div class="detail-head">
@@ -1238,6 +1239,44 @@ async function transferTicket(id,toId){
   await loadAll(); closeModal(); render(); toast('הפניה הועברה אל '+to.name);
   setTimeout(()=>offerWhatsApp(id,toId),400);
 }
+/* ---------- מחיקת פניה (מנהל-על בלבד) ---------- */
+function confirmDeleteTicket(id){
+  const t=ticketById(id);
+  if(t.linkedTicketId){
+    toast('לפניה זו יש פניה מקבילה מקושרת — יש למחוק קודם את המקבילה');
+    return;
+  }
+  showModal(`<h2>🗑 מחיקת פניה ${t.number} <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-err">המחיקה סופית: הפניה, ההיסטוריה וכל התמונות יימחקו לצמיתות. מיועד לפניות הדגמה, כפילויות ופתיחות בטעות בלבד. מספר הפניה יתועד ביומן המחיקות ולא ימוחזר.</div>
+    <div class="field"><label class="req">לאישור, הקלד את מספר הפניה: <b dir="ltr">${t.number}</b></label>
+      <input id="dt_confirm" dir="ltr" style="text-align:left" autocomplete="off"></div>
+    <div class="field"><label>סיבת המחיקה (יתועד ביומן)</label>
+      <select id="dt_reason"><option>פניית הדגמה / בדיקה</option><option>פניה כפולה</option><option>נפתחה בטעות</option><option>אחר</option></select></div>
+    <button class="btn btn-danger btn-block" id="dt_btn" onclick="doDeleteTicket('${id}')">מחיקה סופית</button>`);
+}
+async function doDeleteTicket(id){
+  const t=ticketById(id), m=$('#dt_confirm'), btn=$('#dt_btn');
+  if((m.value||'').trim().toUpperCase()!==t.number.toUpperCase()){
+    toast('מספר הפניה שהוקלד אינו תואם — המחיקה בוטלה');
+    return;
+  }
+  btn.disabled=true; btn.textContent='מוחק…';
+  const {data:paths,error}=await sb.rpc('admin_delete_ticket',{target_ticket:id,del_reason:$('#dt_reason').value});
+  if(error){
+    btn.disabled=false; btn.textContent='מחיקה סופית';
+    if(/does not exist/i.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL למחיקת פניות');
+    else if(/מקבילה/.test(error.message)) toast('קיימת פניה מקבילה — יש למחוק אותה קודם');
+    else errToast(error);
+    return;
+  }
+  /* ניקוי קובצי התמונות מהאחסון */
+  if(paths&&paths.length){
+    try{ await sb.storage.from('ticket-photos').remove(paths); }catch(e){}
+  }
+  await loadAll(); closeModal(); route('tickets');
+  toast('הפניה '+t.number+' נמחקה ותועדה ביומן');
+}
+
 function openTransfer(id){
   const t=ticketById(id);
   const others=activeUsers().filter(x=>x.id!==t.assignedTo);
