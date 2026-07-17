@@ -205,8 +205,9 @@ let RECOVERY=false;             /* חזרה מקישור איפוס סיסמה *
 
 /* ---------- קבועים (זהים לגרסה הקודמת) ---------- */
 const CITIES=['נצרת','ריינה','יפיע','איכסל','עילוט'];
-const ROLES={super:'מנהל על', manager:'מנהלן', field:'איש שטח', contractor:'קבלן'};
+const ROLES={super:'מנהל על', manager:'מנהלן', dispatcher:'מוקדן', field:'איש שטח', contractor:'קבלן'};
 const isMgr=u=>u&&(u.role==='super'||u.role==='manager');
+const isDispatchLike=u=>u&&(u.role==='super'||u.role==='manager'||u.role==='dispatcher');
 const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor');
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
 const TYPES={
@@ -214,10 +215,12 @@ const TYPES={
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
   G:['אי החזרת המצב לקדמותו']
 };
-const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה'};
+const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים'};
 const TYPE_AREA={
  'נזילה / פיצוץ מים':'faults','גלישת ביוב':'faults','שבר בשוחה / במכסה שוחה':'faults',
- 'תלונה על ריח':'faults','הפסקת מים':'faults','תלונה על איכות מים':'faults','אחר':'faults',
+ 'תלונה על ריח':'faults','אחר':'faults',
+ 'תלונה על איכות מים':'water_quality',
+ 'הפסקת מים':'dispatch',  /* מטופל ע"י מוקדנים - סינון מיוחד */
  'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters',
  'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections'
 };
@@ -253,8 +256,12 @@ const activeUsers=()=>DB.users.filter(u=>u.active!==false);
 function usersForTicket(city,type,showAll){
   let list=activeUsers();
   if(showAll) return list;
-  if(city) list=list.filter(u=>!(u.cities&&u.cities.length)||u.cities.includes(city));
   const area=TYPE_AREA[type];
+  /* הפסקת מים: מוצגים רק מוקדנים ומנהל-על - לא לפי ישוב */
+  if(area==='dispatch'){
+    return list.filter(u=>u.role==='dispatcher'||u.role==='super');
+  }
+  if(city) list=list.filter(u=>!(u.cities&&u.cities.length)||u.cities.includes(city));
   if(area) list=list.filter(u=>!(u.workAreas&&u.workAreas.length)||u.workAreas.includes(area));
   return list;
 }
@@ -273,6 +280,12 @@ function rebuildAssign(){
   if(p){ const cur=p.value; p.innerHTML=assignOpts(city,type,cur,true); }
   const b=$('#nt_all_btn');
   if(b) b.textContent=NT_ALL?'🎯 הצג רק גורמים רלוונטיים':'👥 הצג את כל הגורמים';
+  const h=$('#nt_hint');
+  if(h){
+    if(TYPE_AREA[type]==='dispatch') h.innerHTML='🚱 הפסקת מים: הפניה תשויך למוקדן שיטפל בעדכון התושבים ובתיאום. מומלץ לשלוח לקבוצות הוואטסאפ הרלוונטיות מיד לאחר הפתיחה (הכפתור יופיע).';
+    else if(TYPE_AREA[type]==='water_quality') h.innerHTML='💧 איכות מים: מוצגים רק גורמים המוגדרים לתחום זה.';
+    else h.innerHTML='מוצגים הגורמים הרלוונטיים לישוב ולסוג הפניה שנבחרו. הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.';
+  }
 }
 
 /* ---------- סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים ---------- */
@@ -673,9 +686,10 @@ async function logout(){ await sb.auth.signOut(); ME=null; route('landing'); }
 /* ================= מעטפת ================= */
 function vShell(u){
   const tabs=[['home','🏠 ראשי'],['tickets','📋 פניות']];
-  if(isMgr(u)) tabs.push(['newTicket','➕ פניה חדשה']);
+  if(isDispatchLike(u)) tabs.push(['newTicket','➕ פניה חדשה']);
   tabs.push(['map','🗺️ מפה']);
-  if(isMgr(u)) tabs.push(['board','📊 לוח בקרה'],['reports','📈 דוחות']);
+  if(isDispatchLike(u)) tabs.push(['board','📊 לוח בקרה']);
+  if(isMgr(u)) tabs.push(['reports','📈 דוחות']);
   if(u.role==='super') tabs.push(['users','👥 משתמשים']);
   return `
   <div class="topbar"><div class="wrap">
@@ -856,7 +870,7 @@ function vNewTicket(u){
     <div class="field"><label class="req">שיוך לגורם מטפל</label>
       <select id="nt_assign">${assignOpts(CITIES[0],TYPES['W'][0],u.id,false)}</select>
       <div style="margin-top:6px"><button type="button" class="btn btn-outline btn-sm" id="nt_all_btn" onclick="NT_ALL=!NT_ALL;rebuildAssign()">👥 הצג את כל הגורמים</button></div>
-      <div class="hint">מוצגים הגורמים הרלוונטיים לישוב ולסוג הפניה שנבחרו. הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
+      <div class="hint" id="nt_hint">מוצגים הגורמים הרלוונטיים לישוב ולסוג הפניה שנבחרו. הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.</div></div>
     <div class="field"><label>שיוך מקביל לגורם נוסף (אופציונלי)</label>
       <select id="nt_parallel">${assignOpts(CITIES[0],TYPES['W'][0],'',true)}</select>
       <div class="hint">לעבודה במקביל (למשל עובד שטח + קבלן): ייפתחו שתי פניות מקושרות, לכל גורם כרטיס משלו עם תיעוד וסגירה נפרדים, וכל אחד יראה מי הגורם המקביל.</div></div>
