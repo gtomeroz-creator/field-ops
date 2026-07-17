@@ -651,11 +651,14 @@ async function doReset(){
   if(!passOK(pass)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, אותיות באנגלית ומספרים.</div>'; return; }
   const {error}=await sb.auth.updateUser({password:pass});
   if(error){ m.innerHTML=`<div class="alert alert-err">${esc(error.message)}</div>`; return; }
-  RECOVERY=false; await afterAuth(); toast('הסיסמה עודכנה בהצלחה');
+  RECOVERY=false;
+  try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  await afterAuth(); toast('הסיסמה עודכנה בהצלחה');
 }
 
 /* ================= אחרי אימות: טעינת פרופיל ונתונים ================= */
 async function afterAuth(){
+  if(RECOVERY){ route('reset'); return; }
   const {data:{session}}=await sb.auth.getSession();
   if(!session){ ME=null; route('landing'); return; }
   /* הפרופיל נוצר ע"י טריגר — ננסה כמה פעמים אם עוד לא הספיק */
@@ -683,6 +686,29 @@ async function afterAuth(){
 }
 async function logout(){ await sb.auth.signOut(); ME=null; route('landing'); }
 
+/* ---------- החלפת סיסמה יזומה מתוך האפליקציה ---------- */
+function openChangePass(){
+  showModal(`<h2>🔑 החלפת סיסמה <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">מומלץ במיוחד אחרי כניסה עם סיסמה ראשונית או זמנית.</div>
+    <div id="msg"></div>
+    ${pwField('cp_pass','סיסמה חדשה','new-password')}
+    ${pwField('cp_pass2','אימות סיסמה חדשה','new-password')}
+    <button class="btn btn-primary btn-block" id="cp_btn" onclick="doChangePass()">עדכון הסיסמה</button>`);
+}
+async function doChangePass(){
+  const p1=$('#cp_pass').value, p2=$('#cp_pass2').value, m=$('#msg'), btn=$('#cp_btn');
+  if(!passOK(p1)){ m.innerHTML='<div class="alert alert-err">סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים.</div>'; return; }
+  if(p1!==p2){ m.innerHTML='<div class="alert alert-err">שתי הסיסמאות אינן זהות.</div>'; return; }
+  btn.disabled=true; btn.textContent='מעדכן…';
+  const {error}=await sb.auth.updateUser({password:p1});
+  if(error){
+    btn.disabled=false; btn.textContent='עדכון הסיסמה';
+    m.innerHTML=`<div class="alert alert-err">${esc(error.message)}</div>`;
+    return;
+  }
+  closeModal(); toast('הסיסמה הוחלפה בהצלחה 🔒');
+}
+
 /* ================= מעטפת ================= */
 function vShell(u){
   const tabs=[['home','🏠 ראשי'],['tickets','📋 פניות']];
@@ -698,6 +724,7 @@ function vShell(u){
     <button onclick="refresh().then(()=>toast('הנתונים עודכנו'))" title="רענון נתונים" style="font-size:17px;padding:7px">🔄</button>
     ${notifState()==='default'?'<button onclick="askNotif()" title="הפעלת התראות על פניות חדשות" style="font-size:17px;padding:7px">🔕</button>':notifState()==='granted'?'<span title="התראות פעילות" style="font-size:17px;padding:7px">🔔</span>':''}
     <div class="who">${esc(u.name)}<br><span style="opacity:.75">${ROLES[u.role]}</span></div>
+    <button onclick="openChangePass()" title="החלפת סיסמה" style="font-size:16px;padding:7px">🔑</button>
     <button onclick="logout()" title="התנתקות מהמערכת" style="display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.35);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600">⎋ התנתקות</button>
   </div></div>
   ${OFFLINE?'<div style="background:var(--warning-bg);color:var(--warning);text-align:center;padding:7px;font-size:13px;font-weight:600">📡 מצב לא מקוון — מוצגים הנתונים האחרונים שנשמרו במכשיר. עדכונים יידרשו חיבור לרשת.</div>':''}
@@ -1628,6 +1655,9 @@ async function doAddUser(){
 }
 
 /* ================= אתחול ================= */
+/* ================= אתחול ================= */
+/* זיהוי מוקדם של חזרה מקישור איפוס סיסמה — לפני כל ניתוב */
+if(/type=recovery/.test(location.hash)||/type=recovery/.test(location.search)) RECOVERY=true;
 sb.auth.onAuthStateChange((event)=>{
   if(event==='PASSWORD_RECOVERY'){ RECOVERY=true; route('reset'); }
 });
