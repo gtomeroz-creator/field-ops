@@ -357,7 +357,7 @@ async function loadAll(){
 
     const histBy={}, photosBy={};
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
-    ph.data.forEach(p=>{ (photosBy[p.ticket_id]??={before:[],after:[]})[p.kind].push({id:p.id,path:p.path,url:urlMap[p.path]||''}); });
+    ph.data.forEach(p=>{ (photosBy[p.ticket_id]??={before:[],after:[],doc:[]})[p.kind]?.push({id:p.id,path:p.path,url:urlMap[p.path]||'',name:p.file_name||''}); });
 
     DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active,cities:p.cities||[],workAreas:p.work_areas||[]}));
     DB.tickets=tk.data.map(t=>({
@@ -375,10 +375,12 @@ async function loadAll(){
       outage:t.outage_hours?{area:t.outage_area||'',durationHours:+t.outage_hours}:null,
       history:histBy[t.id]||[],
       photosBefore:(photosBy[t.id]||{}).before||[],
-      photosAfter:(photosBy[t.id]||{}).after||[]
+      photosAfter:(photosBy[t.id]||{}).after||[],
+      docs:(photosBy[t.id]||{}).doc||[]
     }));
     OFFLINE=false;
     try{ checkNewAssignments(); }catch(e){}
+    try{ checkClosedTickets(); }catch(e){}
     try{ checkEndOfDay(); }catch(e){}
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
   }catch(e){
@@ -404,6 +406,25 @@ function checkNewAssignments(){
     }
   }
   _prevMyIds=myIds;
+}
+
+/* התראה לפותח הפניה כשהטיפול בה הסתיים (נסגרה ע"י גורם אחר) */
+let _prevOpenedStatus=null;
+function checkClosedTickets(){
+  if(!ME) return;
+  const mineOpened=DB.tickets.filter(t=>t.createdBy===ME.id);
+  const cur=new Map(mineOpened.map(t=>[t.id,t.status]));
+  if(_prevOpenedStatus!==null){
+    for(const [id,st] of cur){
+      const prev=_prevOpenedStatus.get(id);
+      if(prev&&prev!=='done'&&st==='done'){
+        const t=ticketById(id);
+        if(t.assignedTo!==ME.id)
+          notifyUser('✅ הטיפול בפניה '+t.number+' הסתיים', 'נסגרה ע"י '+userName(t.assignedTo)+' · '+t.type+' · '+t.city, id);
+      }
+    }
+  }
+  _prevOpenedStatus=cur;
 }
 function notifyUser(title,body,ticketId){
   toast(title);
@@ -740,7 +761,7 @@ function renderInner(u){
     case 'home': el.innerHTML=vHome(u); break;
     case 'tickets': el.innerHTML=vTickets(u); break;
     case 'ticket': el.innerHTML=vTicket(u,VIEW.arg); startLiveTimers(); initTicketMap(VIEW.arg); break;
-    case 'newTicket': NT_ALL=false; el.innerHTML=vNewTicket(u); break;
+    case 'newTicket': NT_ALL=false; _ntFiles=[]; el.innerHTML=vNewTicket(u); break;
     case 'map': el.innerHTML='<div class="card"><div class="section-t">🗺️ מפת פניות פתוחות</div><div id="bigmap" class="map-box" style="height:70dvh"></div></div>'; initBigMap(); break;
     case 'board': el.innerHTML=vBoard(u); break;
     case 'reports': el.innerHTML=vReports(u); break;
@@ -754,6 +775,7 @@ function myTickets(u){ return DB.tickets.filter(t=>t.assignedTo===u.id); }
 function isToday(t){ const d=new Date(t),n=new Date(); return d.toDateString()===n.toDateString(); }
 function ticketById(id){ return DB.tickets.find(t=>t.id===id); }
 function canEdit(u,t){ return u.role==='super' || t.assignedTo===u.id; }
+const isArchived=t=>t.history&&t.history.some(h=>h.action==='ארכוב קבצים לגיבוי');
 function slaState(t){
   if(t.status==='done') return t.completedAt<=t.dueAt?'ok':'late';
   return Date.now()<=t.dueAt?'ok':'late';
@@ -784,7 +806,10 @@ function vHome(u){
   const open=mine.filter(t=>t.status==='open');
   const prog=mine.filter(t=>t.status==='progress');
   const moved=DB.tickets.filter(t=>t.status!=='done' && t.assignedTo!==u.id && t.history.some(h=>h.by===u.id&&h.action.startsWith('העברת פניה')));
-  const doneToday=DB.tickets.filter(t=>t.status==='done'&&t.completedAt&&isToday(t.completedAt)&&t.history.some(h=>h.by===u.id));
+  const doneToday=DB.tickets.filter(t=>t.status==='done'&&t.completedAt&&isToday(t.completedAt)&&(
+    (u.role==='manager'||u.role==='dispatcher')
+      ? (t.createdBy===u.id||t.history.some(h=>h.by===u.id&&h.action.startsWith('העברת פניה')))
+      : t.history.some(h=>h.by===u.id)));
   const active=[...open,...prog].sort((a,b)=>a.dueAt-b.dueAt);
   return `
   <div class="grid grid-4" style="margin-bottom:20px">
@@ -854,9 +879,11 @@ function vTickets(u){
 }
 function visibleTickets(u){
   let list=[...DB.tickets];
-  if(u.role==='field') list=list.filter(t=>t.assignedTo===u.id||t.history.some(h=>h.by===u.id));
-  /* לקבלן השרת מחזיר ממילא רק את הפניות שלו והמקבילות להן */
-  return list;
+  /* מנהל-על ומוקדן רואים הכל; כל השאר - רק פניות שפתחו, שמשויכות
+     אליהם, שפעלו בהן בעבר, או המקבילות לאלה (השרת אוכף זאת ממילא) */
+  if(u.role==='super'||u.role==='dispatcher') return list;
+  const involved=t=>t.createdBy===u.id||t.assignedTo===u.id||t.history.some(h=>h.by===u.id);
+  return list.filter(t=>involved(t)||list.some(o=>involved(o)&&o.linkedTicketId===t.id));
 }
 function applyFilters(){
   const u=ME;
@@ -894,6 +921,14 @@ function vNewTicket(u){
     </div>
     <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
+    <div class="field"><label>קבצים מצורפים (תמונות ומסמכי PDF)</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <label class="btn btn-outline btn-sm" style="margin:0">📎 צירוף קבצים
+          <input type="file" accept="image/*,application/pdf" multiple hidden onchange="ntAddFiles(event)"></label>
+        <span id="nt_fcount" class="hint"></span>
+      </div>
+      <div id="nt_flist" class="hint" style="margin-top:6px"></div>
+      <div class="hint">תמונות יצורפו כתמונות "לפני"; מסמכי PDF יופיעו במקטע "מסמכים מצורפים" בכרטיס.</div></div>
     <div class="field"><label class="req">שיוך לגורם מטפל</label>
       <select id="nt_assign">${assignOpts(CITIES[0],TYPES['W'][0],u.id,false)}</select>
       <div style="margin-top:6px"><button type="button" class="btn btn-outline btn-sm" id="nt_all_btn" onclick="NT_ALL=!NT_ALL;rebuildAssign()">👥 הצג את כל הגורמים</button></div>
@@ -907,6 +942,45 @@ function vNewTicket(u){
     <button class="btn btn-primary btn-block" id="nt_btn" onclick="doNewTicket()">פתיחת פניה</button>
   </div>`;
 }
+/* ---------- קבצים מצורפים בפתיחת פניה ---------- */
+let _ntFiles=[];
+function ntAddFiles(ev){
+  const files=[...ev.target.files]; if(!files.length) return;
+  const bad=files.find(f=>!/^image\//.test(f.type)&&f.type!=='application/pdf');
+  if(bad){ toast('ניתן לצרף תמונות ומסמכי PDF בלבד'); return; }
+  const big=files.find(f=>f.size>15*1024*1024);
+  if(big){ toast('קובץ גדול מדי (מקסימום 15MB): '+big.name); return; }
+  _ntFiles.push(...files);
+  const c=$('#nt_fcount'), l=$('#nt_flist');
+  if(c) c.textContent=_ntFiles.length+' קבצים';
+  if(l) l.innerHTML=_ntFiles.map(f=>(f.type==='application/pdf'?'📄 ':'🖼 ')+esc(f.name)).join(' · ');
+  ev.target.value='';
+}
+async function uploadDocFiles(ticketId,files){
+  for(let i=0;i<files.length;i++){
+    const f=files[i];
+    const safe=(f.name||'doc.pdf').replace(/[^\w.\-\u0590-\u05FF]/g,'_').slice(-60);
+    const path=`${ticketId}/doc_${Date.now()}_${i}_${safe}`;
+    const {error:e1}=await sb.storage.from('ticket-photos').upload(path,f,{contentType:f.type||'application/pdf'});
+    if(e1) throw e1;
+    const {error:e2}=await sb.from('ticket_photos').insert({ticket_id:ticketId,kind:'doc',path,by_user:ME.id,file_name:f.name||''});
+    if(e2) throw e2;
+  }
+  await addHistory(ticketId,'צירוף מסמכים',files.length+' מסמכים');
+}
+async function attachNtFiles(ticketId){
+  if(!_ntFiles.length) return;
+  const imgs=_ntFiles.filter(f=>/^image\//.test(f.type));
+  const pdfs=_ntFiles.filter(f=>f.type==='application/pdf');
+  if(imgs.length){
+    await new Promise((res,rej)=>compressImages(imgs,async list=>{
+      try{ await uploadDataUrls(ticketId,'before',list); res(); }catch(e){ rej(e); }
+    }));
+  }
+  if(pdfs.length) await uploadDocFiles(ticketId,pdfs);
+  _ntFiles=[];
+}
+
 async function doNewTicket(){
   const cname=$('#nt_cname').value.trim(), phone=$('#nt_phone').value.trim(), addr=$('#nt_addr').value.trim();
   if(!cname||!phone||!addr){ toast('יש למלא שם לקוח, טלפון וכתובת'); return; }
@@ -920,6 +994,7 @@ async function doNewTicket(){
       address:addr, description:$('#nt_desc').value.trim()
     };
     const t=await createTicketCloud({...base, assignedTo:primary});
+    try{ await attachNtFiles(t.id); }catch(e){ toast('הפניה נפתחה אך חלק מהקבצים לא הועלו — ניתן לצרפם מהכרטיס'); }
     let twin=null;
     if(parallel){
       twin=await createTicketCloud({...base, assignedTo:parallel});
@@ -1130,15 +1205,27 @@ function vTicket(u,id){
   <div class="grid grid-2" style="margin-bottom:14px">
     <div class="card">
       <div class="section-t">📷 תמונות לפני (${t.photosBefore.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
+      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות</div>')}</div>
       ${editable&&t.status!=='done'?photoButtons(t.id,'before'):''}
     </div>
     <div class="card">
       <div class="section-t">📷 תמונות אחרי (${t.photosAfter.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||'<div class="hint">אין תמונות — חובה לסגירה</div>'}</div>
+      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות — חובה לסגירה</div>')}</div>
       ${editable&&t.status!=='done'?photoButtons(t.id,'after'):''}
     </div>
   </div>
+
+  ${(t.docs&&t.docs.length)||editable&&t.status!=='done'?`
+  <div class="card" style="margin-bottom:14px">
+    <div class="section-t">📎 מסמכים מצורפים (${(t.docs||[]).length})</div>
+    ${(t.docs||[]).length?`<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+      ${t.docs.map(d=>`<div style="display:flex;align-items:center;gap:8px">
+        <a href="${d.url}" target="_blank" class="link" style="font-size:14px">📄 ${esc(d.name||'מסמך מצורף')}</a>
+        ${editable&&t.status!=='done'?`<button class="btn btn-outline btn-sm" style="padding:2px 9px" onclick="delDoc('${t.id}',${d.id},'${d.path}')">🗑</button>`:''}
+      </div>`).join('')}</div>`:'<div class="hint" style="margin-bottom:10px">אין מסמכים מצורפים</div>'}
+    ${editable&&t.status!=='done'?`<label class="btn btn-outline btn-sm" style="margin:0">📎 צירוף מסמך (PDF)
+      <input type="file" accept="application/pdf" multiple hidden onchange="addDocToTicket(event,'${t.id}')"></label>`:''}
+  </div>`:''}
 
   <div class="grid grid-2">
     <div class="card">
@@ -1210,6 +1297,27 @@ function viewPhoto(id,kind,i){
     <img src="${p.url}" style="width:100%;border-radius:12px">
     ${canEdit(ME,t)&&t.status!=='done'&&!OFFLINE?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${storeKind}',${p.id},'${p.path}')">🗑 מחיקת תמונה</button>`:''}`);
 }
+/* ---------- צירוף ומחיקת מסמכים מהכרטיס ---------- */
+function addDocToTicket(ev,id){
+  const files=[...ev.target.files]; if(!files.length) return;
+  const bad=files.find(f=>f.type!=='application/pdf');
+  if(bad){ toast('כאן ניתן לצרף מסמכי PDF בלבד; תמונות מעלים במקטע התמונות'); return; }
+  const big=files.find(f=>f.size>15*1024*1024);
+  if(big){ toast('קובץ גדול מדי (מקסימום 15MB): '+big.name); return; }
+  toast('מעלה מסמכים…');
+  uploadDocFiles(id,files).then(async()=>{ await loadAll(); render(); toast('המסמכים צורפו'); })
+    .catch(e=>errToast(e,'שגיאה בהעלאת המסמכים'));
+  ev.target.value='';
+}
+async function delDoc(id,docId,path){
+  try{
+    await sb.from('ticket_photos').delete().eq('id',docId);
+    await sb.storage.from('ticket-photos').remove([path]);
+    await addHistory(id,'מחיקת מסמך מצורף');
+    await loadAll(); render(); toast('המסמך נמחק');
+  }catch(e){ errToast(e); }
+}
+
 async function delPhoto(id,kind,photoId,path){
   try{
     await sb.from('ticket_photos').delete().eq('id',photoId);
