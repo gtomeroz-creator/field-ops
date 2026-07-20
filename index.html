@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>ניהול אנשי שטח — הרי נצרת מפעלי מים וביוב</title>
+<title>ניהול פניות ומשימות — תאגיד הרי נצרת</title>
 <meta name="theme-color" content="#0B4F6C">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -184,7 +184,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-07-18 ב';
+const APP_VER='2026-07-19 א';
 try{console.log('ניהול אנשי שטח · גרסה '+APP_VER);}catch(e){}
 const SB_URL='https://dtlksnvhxfkcomxpphew.supabase.co';
 const SB_KEY='sb_publishable_hoNtHB6Zq1hmlBztLNMwQg_fpjPf8EV';
@@ -541,7 +541,7 @@ function bindPwEyes(){
 let LG_MODE='phone';
 function vLogin(){
   return `<div class="auth-hero"><div class="inner"><div class="auth-card">
-    <h1>התחברות למערכת</h1><div class="sub">ניהול אנשי שטח — הרי נצרת מים וביוב</div>
+    <h1>התחברות למערכת</h1><div class="sub">ניהול פניות ומשימות — תאגיד הרי נצרת</div>
     <div id="msg"></div>
     <div style="display:flex;gap:8px;margin-bottom:16px">
       <button class="btn btn-sm ${LG_MODE==='phone'?'btn-primary':'btn-outline'}" style="flex:1" onclick="LG_MODE='phone';render()">📱 טלפון</button>
@@ -743,7 +743,7 @@ function vShell(u){
   if(u.role==='super') tabs.push(['users','👥 משתמשים']);
   return `
   <div class="topbar"><div class="wrap">
-    <div class="brand"><div class="logo">💧</div><div>ניהול אנשי שטח<div style="font-size:11px;font-weight:400;opacity:.8">הרי נצרת מים וביוב</div></div></div>
+    <div class="brand"><div class="logo">💧</div><div>ניהול פניות ומשימות<div style="font-size:11px;font-weight:400;opacity:.8">תאגיד הרי נצרת</div></div></div>
     <div class="spacer"></div>
     <button onclick="refresh().then(()=>toast('הנתונים עודכנו · גרסה '+APP_VER))" title="רענון נתונים · גרסה ${APP_VER}" style="font-size:17px;padding:7px">🔄</button>
     ${notifState()==='default'?'<button onclick="askNotif()" title="הפעלת התראות על פניות חדשות" style="font-size:17px;padding:7px">🔕</button>':notifState()==='granted'?'<span title="התראות פעילות" style="font-size:17px;padding:7px">🔔</span>':''}
