@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-07-26 ב';
+const APP_VER='2026-07-26 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -231,6 +231,7 @@ const CACHE_KEY='hari_cloud_cache_v1';
 let DB={users:[],tickets:[]};   /* תמונת מצב מקומית של נתוני הענן */
 let ME=null;                    /* הפרופיל של המשתמש המחובר */
 let OFFLINE=false;
+let LOAD_ERR='';   /* טקסט שגיאת השרת האחרונה, ריק = ניתוק רשת אמיתי */
 let RECOVERY=false;             /* חזרה מקישור איפוס סיסמה */
 
 /* ---------- קבועים (זהים לגרסה הקודמת) ---------- */
@@ -429,17 +430,20 @@ async function loadAll(){
       photosAfter:(photosBy[t.id]||{}).after||[],
       docs:(photosBy[t.id]||{}).doc||[]
     }));
-    OFFLINE=false;
+    OFFLINE=false; LOAD_ERR='';
     try{ checkNewAssignments(); }catch(e){}
     try{ checkClosedTickets(); }catch(e){}
     try{ checkNewUsers(); }catch(e){}
     try{ checkEndOfDay(); }catch(e){}
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
   }catch(e){
-    /* מצב לא מקוון: מציגים את הנתונים האחרונים שנשמרו במכשיר */
+    /* שמירת הנתונים האחרונים שנשמרו במכשיר */
     const c=store.get(CACHE_KEY);
     if(c){ try{ const j=JSON.parse(c); DB.users=j.users; DB.tickets=j.tickets; }catch(_){} }
     OFFLINE=true;
+    /* הבחנה: ניתוק רשת אמיתי מול תקלה בשרת — כדי לא להטעות */
+    const netDown=(typeof navigator!=='undefined'&&navigator.onLine===false);
+    LOAD_ERR=netDown?'':((e&&e.message)?String(e.message).slice(0,160):'שגיאה לא מזוהה');
   }
 }
 async function refresh(){ await loadAll(); render(); }
@@ -832,7 +836,9 @@ function vShell(u){
     <button onclick="openChangePass()" title="החלפת סיסמה" style="font-size:16px;padding:7px">🔑</button>
     <button onclick="logout()" title="התנתקות מהמערכת" style="display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.35);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:600">⎋ התנתקות</button>
   </div></div>
-  ${OFFLINE?'<div style="background:var(--warning-bg);color:var(--warning);text-align:center;padding:7px;font-size:13px;font-weight:600">📡 מצב לא מקוון — מוצגים הנתונים האחרונים שנשמרו במכשיר. עדכונים יידרשו חיבור לרשת.</div>':''}
+  ${OFFLINE?(LOAD_ERR
+    ?`<div style="background:var(--danger-bg);color:var(--danger);text-align:center;padding:7px;font-size:12.5px;font-weight:600">⚠️ שגיאה בטעינת נתונים מהשרת — מוצגים הנתונים האחרונים שנשמרו במכשיר.<div style="font-weight:400;font-size:11.5px;opacity:.85;margin-top:2px" dir="ltr">${esc(LOAD_ERR)}</div></div>`
+    :'<div style="background:var(--warning-bg);color:var(--warning);text-align:center;padding:7px;font-size:13px;font-weight:600">📡 מצב לא מקוון — מוצגים הנתונים האחרונים שנשמרו במכשיר. עדכונים יידרשו חיבור לרשת.</div>'):''}
   <div class="nav"><div class="wrap">
     ${tabs.map(([k,l])=>`<button class="${VIEW.name===k||(k==='tickets'&&VIEW.name==='ticket')?'on':''}" onclick="route('${k}')">${l}</button>`).join('')}
   </div></div>
