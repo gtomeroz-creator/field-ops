@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-07-26 ג';
+const APP_VER='2026-07-27 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -255,8 +255,11 @@ const TYPE_AREA={
  'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters',
  'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections'
 };
-const STATUSES={open:'פתוחה',progress:'בטיפול',done:'הושלמה'};
-const STATUS_CHIP={open:'chip-open',progress:'chip-progress',done:'chip-done'};
+const STATUSES={open:'פתוחה',progress:'בטיפול',ongoing:'בטיפול מתמשך',done:'הושלמה'};
+const STATUS_CHIP={open:'chip-open',progress:'chip-progress',ongoing:'chip-transfer',done:'chip-done'};
+/* פניה במצב טיפול מתמשך: שעון היעד הדחוף נחתם בעת הסימון */
+const isOngoing=t=>t.status==='ongoing';
+const awaitingPlan=t=>t.status==='ongoing'&&!t.plannedDate;
 
 /* ---------- עזרים ---------- */
 const $=s=>document.querySelector(s);
@@ -421,6 +424,9 @@ async function loadAll(){
       workLog:t.work_log||'',
       breachReason:t.breach_reason||'',
       breachDetail:t.breach_detail||'',
+      ongoingAt:t.ongoing_at?+new Date(t.ongoing_at):null,
+      ongoingReason:t.ongoing_reason||'',
+      plannedDate:t.planned_date||'',
       gps:t.gps_lat!=null?{lat:t.gps_lat,lng:t.gps_lng,at:t.gps_at?+new Date(t.gps_at):null}:null,
       completedAt:t.completed_at?+new Date(t.completed_at):null,
       foundByField:t.found_by_field, linkedTicketId:t.linked_ticket_id||null,
@@ -434,6 +440,7 @@ async function loadAll(){
     try{ checkNewAssignments(); }catch(e){}
     try{ checkClosedTickets(); }catch(e){}
     try{ checkNewUsers(); }catch(e){}
+    try{ checkPlannedWorks(); }catch(e){}
     try{ checkEndOfDay(); }catch(e){}
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
   }catch(e){
@@ -513,6 +520,31 @@ function checkNewUsers(){
     if(store.get(key)) continue;          /* כבר דווח בעבר על מכשיר זה */
     store.set(key,'1');
     notifyUser('👤 משתמש חדש נרשם — '+w.name, (isTechEmail(w.email)?'טלפון: '+w.email.replace(TECH_DOMAIN,''):w.email)+' · הוגדר כ'+ROLES[w.role]+'. יש להגדיר תפקיד ושיוך במסך המשתמשים.', null, 'users');
+  }
+}
+
+/* תזכורת: עבודה מתוכננת שמועדה מתקרב או חלף */
+function checkPlannedWorks(){
+  if(!ME) return;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const relevant=DB.tickets.filter(t=>t.status==='ongoing'&&t.plannedDate&&
+    (t.assignedTo===ME.id||isMgr(ME)));
+  for(const t of relevant){
+    const d=new Date(t.plannedDate+'T00:00:00'); d.setHours(0,0,0,0);
+    const days=Math.round((d-today)/864e5);
+    let kind='';
+    if(days===2||days===1) kind='soon';
+    else if(days<0) kind='late';
+    if(!kind) continue;
+    const key='hari_plan_'+kind+'_'+t.id+'_'+ME.id+'_'+today.toDateString();
+    if(store.get(key)) continue;
+    store.set(key,'1');
+    if(kind==='soon')
+      notifyUser('🔧 עבודה מתוכננת בעוד '+days+' ימים — '+t.number,
+        t.type+' · '+t.city+' · מועד: '+fmtDate(t.plannedDate),t.id);
+    else
+      notifyUser('⏰ חלף מועד הביצוע — '+t.number,
+        t.type+' · '+t.city+' · המועד שנקבע: '+fmtDate(t.plannedDate)+'. יש לעדכן מועד חדש או לסגור.',t.id);
   }
 }
 
@@ -868,8 +900,13 @@ function canEdit(u,t){ return u.role==='super' || t.assignedTo===u.id; }
 const isArchived=t=>t.history&&t.history.some(h=>h.action==='ארכוב קבצים לגיבוי');
 function slaState(t){
   if(t.status==='done') return t.completedAt<=t.dueAt?'ok':'late';
+  /* בטיפול מתמשך: שעון היעד הדחוף נחתם ברגע הסימון */
+  if(t.status==='ongoing') return (t.ongoingAt||Date.now())<=t.dueAt?'ok':'late';
   return Date.now()<=t.dueAt?'ok':'late';
 }
+/* מועד סיום המדידה של היעד הדחוף (סגירה / סימון מתמשך / כעת) */
+const fmtDate=d=>{ if(!d) return '—'; const x=new Date(d+'T12:00:00'); return x.toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'2-digit'}); };
+const slaSealedAt=t=>t.status==='done'?t.completedAt:(t.status==='ongoing'?(t.ongoingAt||Date.now()):Date.now());
 async function addHistory(ticketId,action,note){
   await sb.from('ticket_history').insert({ticket_id:ticketId,by_user:ME.id,action,note:note||''});
 }
@@ -901,6 +938,9 @@ function vHome(u){
       ? (t.createdBy===u.id||t.history.some(h=>h.by===u.id&&h.action.startsWith('העברת פניה')))
       : t.history.some(h=>h.by===u.id)));
   const active=[...open,...prog].sort((a,b)=>a.dueAt-b.dueAt);
+  /* עבודות בטיפול מתמשך: אצל מנהל — כל הארגון; אצל השאר — שלו בלבד */
+  const ongoing=(isMgr(u)?DB.tickets:mine).filter(t=>t.status==='ongoing');
+  const noPlan=ongoing.filter(awaitingPlan).length;
   return `
   <div class="grid grid-4" style="margin-bottom:20px">
     ${statCard(open.length,'פניות לטיפולי','var(--primary)','tickets','open')}
@@ -908,6 +948,9 @@ function vHome(u){
     ${statCard(moved.length,'פניות שהעברתי ולא נסגרו','var(--transfer)','tickets','moved')}
     ${statCard(doneToday.length,'הושלמו היום','var(--success)','tickets','doneToday')}
   </div>
+  ${ongoing.length?`<div style="margin-bottom:18px">
+    ${statCard(ongoing.length,'🔧 עבודות בטיפול מתמשך'+(noPlan?' · '+noPlan+' ממתינות לקביעת מועד':''),'var(--transfer)','tickets','ongoing')}
+  </div>`:''}
   ${u.role==='field'?`
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-water" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
@@ -938,6 +981,7 @@ function trow(t,inWrap){
       <span class="chip ${STATUS_CHIP[t.status]}">${STATUSES[t.status]}</span>
       ${late&&t.status!=='done'?'<span class="chip chip-late">⏰ חריגה מיעד</span>':''}
       ${t.outage?'<span class="chip chip-late">🚱 הפסקת מים</span>':''}
+      ${t.status==='ongoing'?(t.plannedDate?`<span class="chip ${new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()?'chip-late':'chip-transfer'}">🔧 ביצוע: ${fmtDate(t.plannedDate)}</span>`:'<span class="chip chip-late">🔧 ממתין לקביעת מועד</span>'):''}
       ${lt&&!inWrap?'<span class="chip chip-transfer">🔗 מקבילה</span>':''}
     </div>
     <div style="font-weight:700;font-size:14.5px;margin-bottom:3px">${esc(t.type)} · ${esc(t.city)}</div>
@@ -986,7 +1030,7 @@ function renderList(list){
 
 /* מצב הסינון של דף הפניות — נשמר בין רינדורים (רענון אוטומטי, חזרה מכרטיס) */
 let TF={q:'',domain:'',status:'',city:'',assignee:'',from:'',to:'',arg:null};
-const ARG_LABELS={open:'פניות לטיפולי',progress:'בביצוע',moved:'פניות שהעברתי ולא נסגרו',doneToday:'הושלמו היום'};
+const ARG_LABELS={open:'פניות לטיפולי',progress:'בביצוע',moved:'פניות שהעברתי ולא נסגרו',doneToday:'הושלמו היום',ongoing:'עבודות בטיפול מתמשך'};
 
 /* רשימת הפניות אחרי סינון המונה (arg) וסינון התיבות — מקור אחד לשתי הדרכים */
 function filteredTickets(u){
@@ -996,6 +1040,8 @@ function filteredTickets(u){
   if(f==='progress') list=list.filter(t=>t.status==='progress'&&t.assignedTo===u.id);
   if(f==='moved') list=list.filter(t=>t.status!=='done'&&t.assignedTo!==u.id&&t.history.some(h=>h.by===u.id&&h.action.startsWith('העברת פניה')));
   if(f==='doneToday') list=list.filter(t=>t.status==='done'&&isToday(t.completedAt||0));
+  if(f==='ongoing'){ list=list.filter(t=>t.status==='ongoing'&&(isMgr(u)||t.assignedTo===u.id));
+    list.sort((a,b)=>(a.plannedDate||'9999').localeCompare(b.plannedDate||'9999')); }
   if(TF.domain) list=list.filter(t=>t.domain===TF.domain);
   if(TF.status) list=list.filter(t=>t.status===TF.status);
   if(TF.city) list=list.filter(t=>t.city===TF.city);
@@ -1041,7 +1087,7 @@ function buildTicketsCsv(list,title){
   ];
   const cols=['מספר פניה','סיווג','סוג','ישוב','כתובת','סטטוס','גורם מטפל','פתח את הפניה',
               'שם לקוח','טלפון לקוח','תיאור','פעולות שבוצעו','נפתחה בתאריך','יעד טיפול',
-              'הושלמה בתאריך','זמן טיפול','עמידה ביעד','פניה מקבילה','סיבת החריגה','פירוט החריגה'];
+              'הושלמה בתאריך','זמן טיפול','עמידה ביעד','פניה מקבילה','סיבת החריגה','פירוט החריגה','מועד ביצוע מתוכנן','מה נדרש (טיפול מתמשך)'];
   const rows=list.map(t=>[
     t.number, DOMAINS[t.domain].name, t.type, t.city, t.address||'',
     STATUSES[t.status], userName(t.assignedTo), userName(t.createdBy),
@@ -1051,7 +1097,8 @@ function buildTicketsCsv(list,title){
     t.completedAt?fmtDur(t.completedAt-t.createdAt):'',
     t.status==='done'?(t.completedAt<=t.dueAt?'בתוך היעד':'חריגה'):(Date.now()>t.dueAt?'בחריגה כעת':'בתוך היעד'),
     t.linkedTicketId?(ticketById(t.linkedTicketId)?.number||''):'',
-    t.breachReason||'', t.breachDetail||''
+    t.breachReason||'', t.breachDetail||'',
+    t.plannedDate?fmtDate(t.plannedDate):'', t.ongoingReason||''
   ]);
   const all=[...head, cols, ...rows];
   return '\ufeff'+all.map(r=>r.map(csvCell).join(',')).join('\r\n');
@@ -1098,14 +1145,19 @@ function workersWithTickets(){
 /* סטטיסטיקה לרשימת פניות: סה"כ, פתוחות, נסגרו בזמן, חרגו */
 function ticketStats(list){
   const total=list.length;
-  const open=list.filter(t=>t.status!=='done');
-  const done=list.filter(t=>t.status==='done');
-  const onTime=done.filter(t=>t.completedAt<=t.dueAt).length;
-  const lateDone=done.filter(t=>t.completedAt>t.dueAt).length;
+  /* פניה בטיפול מתמשך אינה נספרת כ"פתוחה" — יש לה מועד ביצוע מתוכנן */
+  const open=list.filter(t=>t.status!=='done'&&t.status!=='ongoing');
+  const ongoing=list.filter(t=>t.status==='ongoing');
+  const sealed=list.filter(t=>t.status==='done'||t.status==='ongoing');
+  const onTime=sealed.filter(t=>slaState(t)==='ok').length;
+  const lateSealed=sealed.filter(t=>slaState(t)==='late').length;
   const openLate=open.filter(t=>Date.now()>t.dueAt).length;
+  const planLate=ongoing.filter(t=>t.plannedDate&&new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()).length;
   const pct=n=>total?Math.round(n/total*100):0;
-  return {total, open:open.length, openLate, onTime, lateDone, overdue:lateDone+openLate,
-          pctOnTime:pct(onTime), pctOverdue:pct(lateDone+openLate), pctOpen:pct(open.length)};
+  return {total, open:open.length, openLate, onTime, lateDone:lateSealed, overdue:lateSealed+openLate,
+          ongoing:ongoing.length, awaitingPlan:ongoing.filter(awaitingPlan).length, planLate,
+          pctOnTime:pct(onTime), pctOverdue:pct(lateSealed+openLate), pctOpen:pct(open.length),
+          pctOngoing:pct(ongoing.length)};
 }
 /* ---------- סיכום אישי לוואטסאפ ---------- */
 function workerPhone(w){
@@ -1233,7 +1285,7 @@ function vTickets(u){
   <div class="filters">
     <input id="f_q" placeholder="🔍 חיפוש מס׳ פניה / כתובת / לקוח" value="${esc(TF.q)}" oninput="applyFilters()">
     <select id="f_domain" onchange="applyFilters()"><option value="">כל הסיווגים</option><option value="W"${sel(TF.domain,'W')}>מים</option><option value="S"${sel(TF.domain,'S')}>ביוב</option><option value="G"${sel(TF.domain,'G')}>כללי</option></select>
-    <select id="f_status" onchange="applyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="done"${sel(TF.status,'done')}>הושלמה</option></select>
+    <select id="f_status" onchange="applyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="ongoing"${sel(TF.status,'ongoing')}>בטיפול מתמשך</option><option value="done"${sel(TF.status,'done')}>הושלמה</option></select>
     <select id="f_city" onchange="applyFilters()"><option value="">כל הישובים</option>${CITIES.map(c=>`<option${sel(TF.city,c)}>${c}</option>`).join('')}</select>
     ${canExport(u)?`<select id="f_assignee" onchange="applyFilters()" title="הגורם שהפניה נמצאת אצלו כעת"><option value="">כל הגורמים המטפלים</option>${assignable.map(w=>`<option value="${w.id}"${sel(TF.assignee,w.id)}>${esc(w.name)}${w.role==='contractor'?' (קבלן)':''}</option>`).join('')}</select>`:''}
   </div>
@@ -1580,6 +1632,22 @@ function vTicket(u,id){
     </div>`;
   })():''}
 
+  ${t.status==='ongoing'?`
+  <div class="card" style="margin-bottom:14px;border-color:var(--transfer);background:#faf7fe">
+    <div class="section-t">🔧 בטיפול מתמשך — עבודה מתוכננת</div>
+    <dl class="kv">
+      <dt>סומן בתאריך</dt><dd>${t.ongoingAt?fmtDT(t.ongoingAt):'—'}</dd>
+      <dt>מענה ראשוני</dt><dd>${slaState(t)==='ok'?'<b style="color:var(--success)">ניתן בתוך היעד</b>':'<b style="color:var(--danger)">ניתן באיחור</b>'}</dd>
+      <dt>מועד ביצוע מתוכנן</dt><dd>${t.plannedDate?'<b>'+fmtDate(t.plannedDate)+'</b>'+(new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()?' <span class="chip chip-late">חלף המועד</span>':''):'<b style="color:var(--warning)">ממתין לקביעת מועד</b>'}</dd>
+    </dl>
+    ${t.ongoingReason?`<div style="margin-top:8px;font-size:14px"><b>מה נדרש:</b> ${esc(t.ongoingReason)}</div>`:''}
+    ${isMgr(u)?`
+      <div class="field" style="margin-top:12px"><label class="req">קביעת מועד ביצוע מתוכנן</label>
+        <input type="date" id="pd" value="${t.plannedDate||''}"></div>
+      <button class="btn btn-primary btn-sm" onclick="savePlannedDate('${t.id}')">שמירת המועד</button>`
+    :'<div class="hint" style="margin-top:8px">מועד הביצוע נקבע על ידי מנהל.</div>'}
+  </div>`:''}
+
   ${editable&&t.status!=='done'?`
   <div class="card" style="margin-bottom:14px">
     <div class="section-t">⚙️ עדכון סטטוס ופעולות</div>
@@ -1588,6 +1656,7 @@ function vTicket(u,id){
       <button class="btn btn-success" onclick="setStatus('${t.id}','done')">✔ סימון הושלמה</button>
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       <button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>
+      ${t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
       ${t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
     <div class="hint" style="margin-top:8px">סגירת פניה מחייבת תמונת "אחרי" (נאכף גם בשרת). לאחר העברה — רק הגורם החדש יוכל לעדכן.</div>
@@ -1820,6 +1889,43 @@ async function doDeleteTicket(id){
   }
   await loadAll(); closeModal(); route('tickets');
   toast(scope==='both'?'שתי הפניות המקבילות נמחקו ותועדו ביומן':'הפניה '+t.number+' נמחקה; המקבילה נותקה והפכה עצמאית');
+}
+
+/* ---------- טיפול מתמשך (עבודה מתוכננת) ---------- */
+function openOngoing(id){
+  const t=ticketById(id);
+  showModal(`<h2>🔧 העברה לטיפול מתמשך <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">מיועד לאירוע שהתגלה כמורכב ודורש עבודה מסודרת (הזמנת חומרים, תיאום קבלן, ביצוע מתוכנן).
+      <div style="margin-top:5px">שעון היעד הדחוף ייחתם עכשיו — המענה הראשוני נרשם כ<b>${slaState(t)==='ok'?'ניתן בתוך היעד':'ניתן באיחור'}</b>. מנהל יקבע את מועד הביצוע.</div></div>
+    <div class="field"><label class="req">מה נדרש להשלמת הטיפול?</label>
+      <textarea id="og_reason" rows="3" placeholder="לדוגמה: התגלה שבר בקו הביוב — נדרש קבלן להזמנת צינור וביצוע מסודר"></textarea></div>
+    <button class="btn btn-block" style="background:var(--transfer);color:#fff" id="og_btn" onclick="doOngoing('${id}')">העברה לטיפול מתמשך</button>`);
+}
+async function doOngoing(id){
+  const reason=($('#og_reason')?.value||'').trim();
+  if(!reason){ toast('יש לפרט מה נדרש להשלמת הטיפול'); return; }
+  const btn=$('#og_btn'); if(btn){ btn.disabled=true; btn.textContent='מעדכן…'; }
+  const t=ticketById(id), now=new Date().toISOString();
+  const {error}=await sb.from('tickets').update({status:'ongoing',ongoing_at:now,ongoing_reason:reason}).eq('id',id);
+  if(error){
+    if(btn){ btn.disabled=false; btn.textContent='העברה לטיפול מתמשך'; }
+    if(/ongoing|status_check/.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL של טיפול מתמשך');
+    else errToast(error);
+    return;
+  }
+  await addHistory(id,'העברה לטיפול מתמשך',reason+' · מענה ראשוני '+(slaState(t)==='ok'?'בתוך היעד':'באיחור'));
+  await loadAll(); closeModal(); render();
+  toast('הפניה הועברה לטיפול מתמשך — ממתינה לקביעת מועד ביצוע');
+}
+async function savePlannedDate(id){
+  const t=ticketById(id), d=($('#pd')?.value||'').trim();
+  if(!d){ toast('יש לבחור מועד ביצוע'); return; }
+  if(d===t.plannedDate){ toast('לא בוצע שינוי'); return; }
+  const {error}=await sb.from('tickets').update({planned_date:d}).eq('id',id);
+  if(error){ errToast(error); return; }
+  t.plannedDate=d;
+  await addHistory(id,'קביעת מועד ביצוע',fmtDate(d));
+  await loadAll(); render(); toast('מועד הביצוע נקבע — '+fmtDate(d));
 }
 
 /* ---------- אסקלציה: תקלת מים -> הפסקת מים מקושרת ---------- */
@@ -2092,6 +2198,27 @@ function vReports(u){
     <table class="rep">${typeRows('G').map(x=>`<tr${x.n===0?' style="opacity:.5"':''}><td>${esc(x.tp)}</td><td><b>${x.n}</b></td></tr>`).join('')}
       <tr><td><b>סה"כ כללי</b></td><td><b>${T.filter(t=>t.domain==='G').length}</b></td></tr></table>
   </div>
+  ${(()=>{
+    const og=T.filter(t=>t.status==='ongoing');
+    if(!og.length) return '';
+    const noPlan=og.filter(awaitingPlan);
+    const late=og.filter(t=>t.plannedDate&&new Date(t.plannedDate+'T23:59:59').getTime()<Date.now());
+    const sorted=[...og].sort((a,b)=>(a.plannedDate||'9999').localeCompare(b.plannedDate||'9999'));
+    return `
+  <div class="card" style="margin-top:14px;border-color:var(--transfer)">
+    <div class="section-t">🔧 עבודות בטיפול מתמשך (${og.length})</div>
+    ${noPlan.length?`<div class="alert alert-err" style="font-size:13px">${noPlan.length} עבודות ממתינות לקביעת מועד ביצוע.</div>`:''}
+    ${late.length?`<div class="alert alert-warn" style="font-size:13px">${late.length} עבודות שחלף מועד הביצוע שנקבע להן.</div>`:''}
+    <table class="rep"><tr><th>פניה</th><th>סוג</th><th>ישוב</th><th>מבצע</th><th>מועד ביצוע</th></tr>
+      ${sorted.map(t=>{
+        const over=t.plannedDate&&new Date(t.plannedDate+'T23:59:59').getTime()<Date.now();
+        return `<tr style="${!t.plannedDate?'background:#FEF2F2':(over?'background:#FFF7ED':'')}">
+          <td><b dir="ltr">${t.number}</b></td><td>${esc(t.type)}</td><td>${esc(t.city)}</td>
+          <td>${esc(userName(t.assignedTo))}</td>
+          <td>${t.plannedDate?fmtDate(t.plannedDate)+(over?' <span class="chip chip-late">חלף</span>':''):'<b style="color:var(--danger)">ממתין לקביעה</b>'}</td></tr>`;
+      }).join('')}</table>
+    <div class="hint" style="margin-top:5px">עבודות אלה אינן נספרות ב"עדיין פתוחות" — יעד המענה הראשוני שלהן נחתם בעת הסימון.</div>
+  </div>`;})()}
   ${(()=>{
     const late=T.filter(t=>t.status==='done'&&t.completedAt>t.dueAt);
     if(!late.length) return '';
