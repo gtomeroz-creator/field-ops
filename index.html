@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-07-27 א';
+const APP_VER='2026-07-27 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1925,7 +1925,7 @@ async function savePlannedDate(id){
   if(error){ errToast(error); return; }
   t.plannedDate=d;
   await addHistory(id,'קביעת מועד ביצוע',fmtDate(d));
-  await loadAll(); render(); toast('מועד הביצוע נקבע — '+fmtDate(d));
+  await loadAll(); render(); toast('✔ מועד הביצוע נקבע — '+fmtDate(d));
 }
 
 /* ---------- אסקלציה: תקלת מים -> הפסקת מים מקושרת ---------- */
@@ -1999,7 +1999,9 @@ async function saveBreachReason(id){
   }
   t.breachReason=reason; t.breachDetail=detail;
   await addHistory(id,'סיבת חריגה מיעד',reason+(detail?' — '+detail:''));
-  await loadAll(); render(); toast('הסיבה נשמרה');
+  await loadAll();
+  route('tickets');
+  toast('✔ הסיבה נשמרה לפניה '+t.number);
 }
 
 async function saveWorkLog(id){
