@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-07-27 ב';
+const APP_VER='2026-07-27 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1722,7 +1722,7 @@ function vTicket(u,id){
     <div class="card">
       <div class="section-t">🕓 היסטוריית סטטוסים ופעולות</div>
       <ul class="timeline">
-        ${[...t.history].reverse().map(h=>`<li><b>${esc(h.action)}</b>${h.note?' — '+esc(h.note):''}<div class="t">${fmtDT(h.at)} · ${esc(userName(h.by))}</div></li>`).join('')||'<div class="hint">אין רישומים.</div>'}
+        ${[...t.history].reverse().map(h=>`<li><b>${esc(h.action)}</b>${h.note?`<div style="margin-top:2px;font-size:13.5px">${esc(h.note)}</div>`:''}<div class="t">${fmtDT(h.at)} · ${esc(userName(h.by))}</div></li>`).join('')||'<div class="hint">אין רישומים.</div>'}
       </ul>
     </div>
   </div>`;
@@ -1834,7 +1834,7 @@ async function transferTicket(id,toId){
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
   if(liveLog) await addHistory(id,'הערות '+(ME.name||''),liveLog);
-  await addHistory(id,'העברת פניה',userName(ME.id)+' → '+to.name);
+  /* רישום ההעברה נכתב ע"י הטריגר בשרת (עם שמות משני הצדדים) */
   t.workLog='';
   await loadAll(); closeModal(); render(); toast('הפניה הועברה אל '+to.name);
   setTimeout(()=>offerWhatsApp(id,toId),400);
