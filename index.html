@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-03 א';
+const APP_VER='2026-08-03 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -977,7 +977,7 @@ function vHome(u){
     <button class="btn btn-outline" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה</button>
   </div>`}
   <div class="section-t">המשימות שלי — לפי דחיפות</div>
-  ${active.length?active.map(trow).join(''):'<div class="empty"><div class="i">🎉</div>אין פניות פתוחות לטיפולך כרגע.</div>'}`;
+  ${active.length?renderList(groupLinked(active)):'<div class="empty"><div class="i">🎉</div>אין פניות פתוחות לטיפולך כרגע.</div>'}`;
 }
 function statCard(n,l,color,view,filter){
   return `<div class="stat" onclick="route('${view}','${filter}')">
