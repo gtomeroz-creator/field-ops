@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-03 ב';
+const APP_VER='2026-08-04 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -998,7 +998,7 @@ function trow(t,inWrap){
       ${lt&&!inWrap?'<span class="chip chip-transfer">🔗 מקבילה</span>':''}
     </div>
     <div style="font-weight:700;font-size:14.5px;margin-bottom:3px">${esc(t.type)} · ${esc(t.city)}</div>
-    <div class="desc">${esc(t.description)||'ללא תיאור'}</div>
+    <div class="desc">${esc([t.customerName,t.address].filter(Boolean).join(' · ')||t.description||'ללא פרטי פונה')}</div>
     ${lt&&!inWrap?`<div style="font-size:12.5px;color:var(--transfer);background:#f3ecfb;border-radius:6px;padding:4px 9px;margin:4px 0;display:inline-block">↔ אירוע משותף עם <b dir="ltr">${lt.number}</b> · ${esc(userName(lt.assignedTo))} (${STATUSES[lt.status]})</div>`:''}
     <div class="meta">
       <span>👤 ${esc(userName(t.assignedTo))}</span>
@@ -1836,6 +1836,36 @@ async function setStatus(id,status){
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
   await loadAll(); render(); toast('הסטטוס עודכן: '+STATUSES[status]);
+  /* אירוע משותף: אם המקבילה עדיין פתוחה, מציעים לסגור גם אותה */
+  if(status==='done'){
+    const lt=t.linkedTicketId?ticketById(t.linkedTicketId):null;
+    if(lt&&lt.status!=='done') setTimeout(()=>offerCloseTwin(id,lt.id),400);
+  }
+}
+/* ---------- סגירת הפניה המקבילה (אותו אירוע) ---------- */
+function offerCloseTwin(srcId,twinId){
+  const src=ticketById(srcId), lt=ticketById(twinId);
+  if(!src||!lt) return;
+  const sameOwner=lt.assignedTo===ME.id;
+  showModal(`<h2>🔗 אירוע משותף — פניה מקבילה פתוחה</h2>
+    <div class="alert alert-info">הפניה <b dir="ltr">${src.number}</b> נסגרה.
+      הפניה המקבילה <b dir="ltr">${lt.number}</b>${lt.outage?' (הפסקת מים)':''} עדיין פתוחה${sameOwner?'':' אצל '+esc(userName(lt.assignedTo))}.
+      <div style="margin-top:5px">מדובר באותו אירוע — האם לסגור גם אותה?</div></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-success" style="flex:1" onclick="doCloseTwin('${srcId}')">✔ סגירת ${lt.number} גם</button>
+      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">להשאיר פתוחה</button>
+    </div>
+    <div class="hint" style="margin-top:8px">התיעוד והתמונות של הפניה שנסגרה משמשים כתיעוד לשתיהן.</div>`);
+}
+async function doCloseTwin(srcId){
+  const {data:num,error}=await sb.rpc('close_linked_twin',{source_ticket:srcId});
+  if(error){
+    if(/does not exist/i.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL לסגירת מקבילות');
+    else errToast(error);
+    return;
+  }
+  await loadAll(); closeModal(); render();
+  toast(num?('✔ גם הפניה '+num+' נסגרה'):'הפניה המקבילה כבר סגורה');
 }
 async function transferTicket(id,toId){
   const t=ticketById(id), to=userById(toId);
