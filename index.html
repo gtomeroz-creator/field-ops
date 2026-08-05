@@ -190,7 +190,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-04 א';
+const APP_VER='2026-08-04 ד';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -244,8 +244,11 @@ const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chi
 const TYPES={
   W:['נזילה / פיצוץ מים','החלפת מונה שבור','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
-  G:['אי החזרת המצב לקדמותו']
+  G:['אי החזרת המצב לקדמותו','טופס בדיקה לטופס 4']
 };
+const FORM4='טופס בדיקה לטופס 4';
+const isForm4=t=>t&&t.type===FORM4;
+const F4_PHOTOS={f4_main_meter:'מד מים ראשי',f4_sub_meters:'מדי מים משניים',f4_meter_location:'מיקום המד',f4_fire:'מערכת כיבוי אש',f4_sewage:'בדיקת ביוב',f4_drainage:'מערכת ניקוז',f4_pool:'בריכת שחיה'};
 const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים'};
 const TYPE_AREA={
  'נזילה / פיצוץ מים':'faults','גלישת ביוב':'faults','שבר בשוחה / במכסה שוחה':'faults',
@@ -253,7 +256,8 @@ const TYPE_AREA={
  'תלונה על איכות מים':'water_quality',
  'הפסקת מים':'dispatch',  /* מטופל ע"י מוקדנים - סינון מיוחד */
  'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters',
- 'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections'
+ 'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections',
+ 'טופס בדיקה לטופס 4':'connections'
 };
 const STATUSES={open:'פתוחה',progress:'בטיפול',ongoing:'בטיפול מתמשך',done:'הושלמה'};
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',ongoing:'chip-transfer',done:'chip-done'};
@@ -423,11 +427,13 @@ async function loadAll(){
 
     const histBy={}, photosBy={};
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
-    ph.data.forEach(p=>{ (photosBy[p.ticket_id]??={before:[],after:[],doc:[]})[p.kind]?.push({id:p.id,path:p.path,url:urlMap[p.path]||'',name:p.file_name||''}); });
+    ph.data.forEach(p=>{ const _b=(photosBy[p.ticket_id]??={before:[],after:[],doc:[]}); (_b[p.kind]??=[]).push({id:p.id,path:p.path,url:urlMap[p.path]||'',name:p.file_name||''}); });
 
     DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active,cities:p.cities||[],workAreas:p.work_areas||[],createdAt:p.created_at?+new Date(p.created_at):0}));
     DB.tickets=tk.data.map(t=>({
       id:t.id, number:t.number, domain:t.domain, type:t.type, city:t.city, address:t.address||'',
+      blockNo:t.block_no||'', parcelNo:t.parcel_no||'',
+      form4:t.form4||{},
       customerName:t.customer_name||'', customerId:t.customer_id||'', customerPhone:t.customer_phone||'',
       description:t.description||'', status:t.status,
       createdAt:+new Date(t.created_at), createdBy:t.created_by, assignedTo:t.assigned_to,
@@ -438,6 +444,7 @@ async function loadAll(){
       breachReason:t.breach_reason||'',
       breachDetail:t.breach_detail||'',
       ongoingAt:t.ongoing_at?+new Date(t.ongoing_at):null,
+      ongoingOwner:t.ongoing_owner||null,
       ongoingReason:t.ongoing_reason||'',
       plannedDate:t.planned_date||'',
       gps:t.gps_lat!=null?{lat:t.gps_lat,lng:t.gps_lng,at:t.gps_at?+new Date(t.gps_at):null}:null,
@@ -447,7 +454,8 @@ async function loadAll(){
       history:histBy[t.id]||[],
       photosBefore:(photosBy[t.id]||{}).before||[],
       photosAfter:(photosBy[t.id]||{}).after||[],
-      docs:(photosBy[t.id]||{}).doc||[]
+      docs:(photosBy[t.id]||{}).doc||[],
+      f4photos:Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]]))
     }));
     OFFLINE=false; LOAD_ERR='';
     try{ checkNewAssignments(); }catch(e){}
@@ -928,6 +936,7 @@ async function addHistory(ticketId,action,note){
 async function createTicketCloud(data){
   const row={
     domain:data.domain, type:data.type, city:data.city, address:data.address||'',
+    block_no:data.blockNo||'', parcel_no:data.parcelNo||'',
     customer_name:data.customerName||'', customer_id:data.customerId||'', customer_phone:data.customerPhone||'',
     description:data.description||'', created_by:ME.id, assigned_to:data.assignedTo,
     found_by_field:!!data.foundByField
@@ -1099,11 +1108,12 @@ function buildTicketsCsv(list,title){
     []
   ];
   const cols=['מספר פניה','סיווג','סוג','ישוב','כתובת','סטטוס','גורם מטפל','פתח את הפניה',
-              'שם לקוח','טלפון לקוח','תיאור','פעולות שבוצעו','נפתחה בתאריך','יעד טיפול',
+              'גוש','חלקה','שם לקוח','טלפון לקוח','תיאור','פעולות שבוצעו','נפתחה בתאריך','יעד טיפול',
               'הושלמה בתאריך','זמן טיפול','עמידה ביעד','פניה מקבילה','סיבת החריגה','פירוט החריגה','מועד ביצוע מתוכנן','מה נדרש (טיפול מתמשך)'];
   const rows=list.map(t=>[
     t.number, DOMAINS[t.domain].name, t.type, t.city, t.address||'',
     STATUSES[t.status], userName(t.assignedTo), userName(t.createdBy),
+    t.blockNo||'', t.parcelNo||'',
     t.customerName||'', t.customerPhone||'', t.description||'', t.workLog||'',
     fmtDT(t.createdAt), fmtDT(t.dueAt),
     t.completedAt?fmtDT(t.completedAt):'',
@@ -1343,7 +1353,9 @@ function applyFilters(){
 
 /* ---------- טופס פתיחת פניה ----------- */
 function typeOptions(domain,sel){
-  return TYPES[domain].map(t=>`<option ${t===sel?'selected':''}>${t}</option>`).join('');
+  /* טופס בדיקה לטופס 4 נפתח ע"י מנהלן ומנהל-על בלבד */
+  return TYPES[domain].filter(t=>t!==FORM4||isMgr(ME))
+    .map(t=>`<option ${t===sel?'selected':''}>${t}</option>`).join('');
 }
 function vNewTicket(u){
   return `<div class="card" style="max-width:640px;margin:0 auto">
@@ -1365,6 +1377,10 @@ function vNewTicket(u){
       <div class="field"><label class="req">ישוב / עיר</label><select id="nt_city" onchange="rebuildAssign()">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
+    <div class="grid grid-2">
+      <div class="field"><label>גוש</label><input id="nt_block" inputmode="numeric"></div>
+      <div class="field"><label>חלקה</label><input id="nt_parcel" inputmode="numeric"></div>
+    </div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label>קבצים מצורפים (תמונות ומסמכי PDF)</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -1436,7 +1452,8 @@ async function doNewTicket(){
     const base={
       domain:$('#nt_domain').value, type:$('#nt_type').value, city:$('#nt_city').value,
       customerName:cname, customerId:$('#nt_cid').value.trim(), customerPhone:phone,
-      address:addr, description:$('#nt_desc').value.trim()
+      address:addr, blockNo:$('#nt_block').value.trim(), parcelNo:$('#nt_parcel').value.trim(),
+      description:$('#nt_desc').value.trim()
     };
     const t=await createTicketCloud({...base, assignedTo:primary});
     try{ await attachNtFiles(t.id); }catch(e){ toast('הפניה נפתחה אך חלק מהקבצים לא הועלו — ניתן לצרפם מהכרטיס'); }
@@ -1605,6 +1622,7 @@ function vTicket(u,id){
           ${t.customerPhone?`<dt>טלפון</dt><dd dir="ltr" style="text-align:right">${esc(t.customerPhone)}</dd>`:''}
           <dt>ישוב</dt><dd>${esc(t.city)}</dd>
           ${t.address?`<dt>כתובת</dt><dd>${esc(t.address)}</dd>`:''}
+          ${(t.blockNo||t.parcelNo)?`<dt>גוש / חלקה</dt><dd>${esc(t.blockNo||'—')} / ${esc(t.parcelNo||'—')}</dd>`:''}
           <dt>נפתחה</dt><dd>${fmtDT(t.createdAt)} · ע"י ${esc(userName(t.createdBy))}${t.foundByField?' <span class="chip chip-general">דיווח שטח</span>':''}</dd>
           <dt>גורם מטפל</dt><dd>${esc(userName(t.assignedTo))}</dd>
           ${t.firstResponseAt?`<dt>מענה ראשוני</dt><dd>${fmtDT(t.firstResponseAt)}</dd>`:''}
@@ -1645,20 +1663,23 @@ function vTicket(u,id){
     </div>`;
   })():''}
 
+  ${isForm4(t)?f4Card(u,t):''}
+
   ${t.status==='ongoing'?`
   <div class="card" style="margin-bottom:14px;border-color:var(--transfer);background:#faf7fe">
     <div class="section-t">🔧 בטיפול מתמשך — עבודה מתוכננת</div>
     <dl class="kv">
       <dt>סומן בתאריך</dt><dd>${t.ongoingAt?fmtDT(t.ongoingAt):'—'}</dd>
+      ${t.ongoingOwner?`<dt>מנהל העבודה</dt><dd>${esc(userName(t.ongoingOwner))}${t.ongoingOwner===t.assignedTo?' <span class="chip chip-water" style="font-size:10px">ניהול עצמי</span>':''}</dd>`:''}
       <dt>מענה ראשוני</dt><dd>${slaState(t)==='ok'?'<b style="color:var(--success)">ניתן בתוך היעד</b>':'<b style="color:var(--danger)">ניתן באיחור</b>'}</dd>
       <dt>מועד ביצוע מתוכנן</dt><dd>${t.plannedDate?'<b>'+fmtDate(t.plannedDate)+'</b>'+(new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()?' <span class="chip chip-late">חלף המועד</span>':''):'<b style="color:var(--warning)">ממתין לקביעת מועד</b>'}</dd>
     </dl>
     ${t.ongoingReason?`<div style="margin-top:8px;font-size:14px"><b>מה נדרש:</b> ${esc(t.ongoingReason)}</div>`:''}
-    ${isMgr(u)?`
+    ${(isMgr(u)||t.ongoingOwner===u.id)?`
       <div class="field" style="margin-top:12px"><label class="req">קביעת מועד ביצוע מתוכנן</label>
         <input type="date" id="pd" value="${t.plannedDate||''}"></div>
       <button class="btn btn-primary btn-sm" onclick="savePlannedDate('${t.id}')">שמירת המועד</button>`
-    :'<div class="hint" style="margin-top:8px">מועד הביצוע נקבע על ידי מנהל.</div>'}
+    :'<div class="hint" style="margin-top:8px">מועד הביצוע נקבע על ידי הגורם המנהל את העבודה.</div>'}
   </div>`:''}
 
   ${editable&&t.status!=='done'?`
@@ -1791,8 +1812,11 @@ function addPhoto(ev,id,kind){
   });
 }
 function viewPhoto(id,kind,i){
-  const t=ticketById(id), p=t[kind][i];
-  const storeKind=kind==='photosBefore'?'before':'after';
+  const t=ticketById(id);
+  /* מקטעי טופס 4 מגיעים בפורמט 'f4:<kind>' */
+  const f4=kind.startsWith('f4:')?kind.slice(3):null;
+  const p=f4?(t.f4photos||{})[f4][i]:t[kind][i];
+  const storeKind=f4||(kind==='photosBefore'?'before':'after');
   showModal(`<h2>תצוגת תמונה <button class="x" onclick="closeModal()">×</button></h2>
     <img src="${p.url}" style="width:100%;border-radius:12px">
     ${canEdit(ME,t)&&t.status!=='done'&&!OFFLINE?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${storeKind}',${p.id},'${p.path}')">🗑 מחיקת תמונה</button>`:''}`);
@@ -1934,6 +1958,280 @@ async function doDeleteTicket(id){
   toast(scope==='both'?'שתי הפניות המקבילות נמחקו ותועדו ביומן':'הפניה '+t.number+' נמחקה; המקבילה נותקה והפכה עצמאית');
 }
 
+/* ================= טופס בדיקה לטופס 4 ================= */
+const F4_USE=['מגורים','מסחר ותעסוקה','אחר'];
+const F4_FIRE=['ספרינקלרים','גלגלונים','אחר'];
+const F4_POOL_CONN=['משאבות','חיבור ישיר'];
+
+function f4Get(t){ return (t&&t.form4)||{}; }
+function f4Row(label,val){ return `<dt>${label}</dt><dd>${val||'<span class="hint">—</span>'}</dd>`; }
+function f4YN(v){ return v==='yes'?'כן':(v==='no'?'לא':''); }
+
+/* --- שורת תמונות למקטע --- */
+function f4PhotoBlock(t,kind,editable){
+  const list=(t.f4photos||{})[kind]||[];
+  return `<div style="margin-top:6px">
+    <div class="photos">${list.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','f4:${kind}',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
+    ${editable?`<label class="btn btn-outline btn-sm" style="margin-top:5px">📷 צילום / העלאה — ${F4_PHOTOS[kind]}
+      <input type="file" accept="image/*" capture="environment" multiple hidden onchange="f4AddPhotos(event,'${t.id}','${kind}')"></label>`:''}
+  </div>`;
+}
+function f4AddPhotos(ev,id,kind){
+  const files=[...ev.target.files]; if(!files.length) return;
+  toast('מעלה תמונות…');
+  compressImages(files,async list=>{
+    try{ await uploadDataUrls(id,kind,list); await loadAll(); render(); toast('התמונות נוספו'); }
+    catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
+  });
+  ev.target.value='';
+}
+
+/* --- מדי מים משניים (רשימה דינמית) --- */
+let F4_SUBS=[];
+function f4SubsHtml(){
+  return F4_SUBS.map((s,i)=>`<div class="grid grid-2" style="gap:8px;align-items:end;margin-bottom:6px">
+    <div class="field" style="margin:0"><label>מס' מד משני ${i+1}</label>
+      <input value="${esc(s.no||'')}" oninput="F4_SUBS[${i}].no=this.value"></div>
+    <div class="field" style="margin:0"><label>קוטר</label>
+      <div style="display:flex;gap:6px">
+        <input value="${esc(s.dia||'')}" oninput="F4_SUBS[${i}].dia=this.value">
+        <button class="btn btn-outline btn-sm" onclick="F4_SUBS.splice(${i},1);f4RenderSubs()" title="הסרה">✕</button>
+      </div></div>
+  </div>`).join('')||'<div class="hint">לא נוספו מדים משניים.</div>';
+}
+function f4RenderSubs(){ const el=$('#f4_subs'); if(el) el.innerHTML=f4SubsHtml(); }
+function f4AddSub(){ F4_SUBS.push({no:'',dia:''}); f4RenderSubs(); }
+
+/* --- כרטיס הטופס בכרטיס הפניה --- */
+function f4Card(u,t){
+  const f=f4Get(t), editable=canEdit(u,t)&&t.status!=='done';
+  const sel=(v,val)=>v===val?' selected':'';
+  const yn=(id,v)=>`<select id="${id}"><option value="">—</option><option value="yes"${sel(v,'yes')}>כן</option><option value="no"${sel(v,'no')}>לא</option></select>`;
+  if(editable) F4_SUBS=Array.isArray(f.subMeters)?JSON.parse(JSON.stringify(f.subMeters)):[];
+
+  if(!editable){
+    /* תצוגה בלבד */
+    return `<div class="card" style="margin-bottom:14px;border-color:var(--primary)">
+      <div class="section-t">📋 ממצאי בדיקה — טופס 4</div>
+      <dl class="kv">
+        ${f4Row('הותקן מד מים ראשי',f4YN(f.mainInstalled))}
+        ${f4Row('מספר מד המים',esc(f.mainNo||''))}
+        ${f4Row('קוטר מד',esc(f.mainDia||''))}
+        ${f4Row('מדי מים משניים',(f.subMeters||[]).length?(f.subMeters||[]).map(s=>`${esc(s.no||'—')} (קוטר ${esc(s.dia||'—')})`).join('<br>'):'')}
+        ${f4Row('מהות השימוש',esc(f.use==='אחר'?(f.useOther||'אחר'):(f.use||'')))}
+        ${f4Row('לחץ מים במערכת (בר)',esc(f.pressure||''))}
+        ${f4Row('מיקום המד',esc(f.meterLoc||''))}
+        ${f4Row('סוג מערכת כיבוי אש',esc(f.fireType==='אחר'?(f.fireOther||'אחר'):(f.fireType||'')))}
+        ${f4Row('כיבוי אש מחובר למערכת המים',f4YN(f.fireConnected))}
+        ${f4Row('מחובר למערכת ביוב',f4YN(f.sewageConnected))}
+        ${f4Row('חיבור הביוב תקין (שיפוע/אטימות/מכסים)',f4YN(f.sewageOk))}
+        ${f4Row('ניקוז מחובר למערכת ביוב',f4YN(f.drainToSewage))}
+        ${f4Row('קיימת בריכת שחיה',f4YN(f.pool))}
+        ${f4Row('הבריכה מחוברת לביוב',f4YN(f.poolToSewage))}
+        ${f4Row('חיבור הבריכה דרך',esc(f.poolConn||''))}
+        ${f.notes?f4Row('הערות',esc(f.notes)):''}
+      </dl>
+      ${Object.keys(F4_PHOTOS).map(k=>((t.f4photos||{})[k]||[]).length?`<div style="margin-top:10px"><b style="font-size:13px">${F4_PHOTOS[k]}</b>${f4PhotoBlock(t,k,false)}</div>`:'').join('')}
+      <button class="btn btn-outline btn-block" style="margin-top:12px" onclick="f4Print('${t.id}')">🖨 הפקת מסמך להדפסה וחתימה</button>
+    </div>`;
+  }
+
+  return `<div class="card" style="margin-bottom:14px;border-color:var(--primary)">
+    <div class="section-t">📋 מילוי ממצאי בדיקה — טופס 4</div>
+
+    <div class="section-t" style="font-size:14px;margin-top:6px">💧 מד מים ראשי</div>
+    <div class="grid grid-2">
+      <div class="field"><label>האם הותקן מד מים ראשי?</label>${yn('f4_mainInstalled',f.mainInstalled)}</div>
+      <div class="field"><label>מספר מד המים</label><input id="f4_mainNo" value="${esc(f.mainNo||'')}"></div>
+      <div class="field"><label>קוטר מד</label><input id="f4_mainDia" value="${esc(f.mainDia||'')}"></div>
+      <div class="field"><label>לחץ מים במערכת (בר)</label><input id="f4_pressure" inputmode="decimal" value="${esc(f.pressure||'')}"></div>
+    </div>
+    ${f4PhotoBlock(t,'f4_main_meter',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🔢 מדי מים משניים</div>
+    <div id="f4_subs">${f4SubsHtml()}</div>
+    <button class="btn btn-outline btn-sm" onclick="f4AddSub()">➕ הוספת מד משני</button>
+    ${f4PhotoBlock(t,'f4_sub_meters',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🏠 שימוש ומיקום</div>
+    <div class="grid grid-2">
+      <div class="field"><label>מהות השימוש</label>
+        <select id="f4_use" onchange="$('#f4_useOtherWrap').hidden=(this.value!=='אחר')">
+          <option value="">—</option>${F4_USE.map(x=>`<option${sel(f.use,x)}>${x}</option>`).join('')}
+        </select></div>
+      <div class="field" id="f4_useOtherWrap" ${f.use==='אחר'?'':'hidden'}><label>פירוט</label>
+        <input id="f4_useOther" value="${esc(f.useOther||'')}"></div>
+      <div class="field"><label>מיקום המד</label>
+        <select id="f4_meterLoc"><option value="">—</option>
+          <option${sel(f.meterLoc,'גבול המגרש')}>גבול המגרש</option>
+          <option${sel(f.meterLoc,'בתוך המגרש')}>בתוך המגרש</option></select></div>
+    </div>
+    ${f4PhotoBlock(t,'f4_meter_location',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🧯 מערכת כיבוי אש (אם רלוונטי)</div>
+    <div class="grid grid-2">
+      <div class="field"><label>סוג המערכת</label>
+        <select id="f4_fireType" onchange="$('#f4_fireOtherWrap').hidden=(this.value!=='אחר')">
+          <option value="">—</option>${F4_FIRE.map(x=>`<option${sel(f.fireType,x)}>${x}</option>`).join('')}
+        </select></div>
+      <div class="field" id="f4_fireOtherWrap" ${f.fireType==='אחר'?'':'hidden'}><label>פירוט</label>
+        <input id="f4_fireOther" value="${esc(f.fireOther||'')}"></div>
+      <div class="field"><label>מחוברת למערכת המים?</label>${yn('f4_fireConnected',f.fireConnected)}</div>
+    </div>
+    ${f4PhotoBlock(t,'f4_fire',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🚽 בדיקת ביוב</div>
+    <div class="grid grid-2">
+      <div class="field"><label>המבנה/המגרש מחובר למערכת ביוב?</label>${yn('f4_sewageConnected',f.sewageConnected)}</div>
+      <div class="field"><label>חיבור הביוב תקין (שיפוע/אטימות/מכסים)?</label>${yn('f4_sewageOk',f.sewageOk)}</div>
+    </div>
+    ${f4PhotoBlock(t,'f4_sewage',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🌧 מערכת ניקוז</div>
+    <div class="field"><label>מערכת הניקוז של המבנה מחוברת למערכת ביוב?</label>${yn('f4_drainToSewage',f.drainToSewage)}</div>
+    ${f4PhotoBlock(t,'f4_drainage',true)}
+
+    <div class="section-t" style="font-size:14px;margin-top:12px">🏊 בריכת שחיה (אם רלוונטית)</div>
+    <div class="grid grid-2">
+      <div class="field"><label>קיימת בריכת שחיה פרטית?</label>${yn('f4_pool',f.pool)}</div>
+      <div class="field"><label>מחוברת למערכת ביוב?</label>${yn('f4_poolToSewage',f.poolToSewage)}</div>
+      <div class="field"><label>החיבור דרך</label>
+        <select id="f4_poolConn"><option value="">—</option>${F4_POOL_CONN.map(x=>`<option${sel(f.poolConn,x)}>${x}</option>`).join('')}</select></div>
+    </div>
+    ${f4PhotoBlock(t,'f4_pool',true)}
+
+    <div class="field" style="margin-top:12px"><label>הערות בודק</label>
+      <textarea id="f4_notes" rows="2">${esc(f.notes||'')}</textarea></div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-primary" style="flex:1" onclick="f4Save('${t.id}')">💾 שמירת ממצאי הבדיקה</button>
+      <button class="btn btn-outline" onclick="f4Print('${t.id}')">🖨 הפקת מסמך</button>
+    </div>
+  </div>`;
+}
+
+async function f4Save(id){
+  const v=s=>($('#'+s)?.value||'').trim();
+  const data={
+    mainInstalled:v('f4_mainInstalled'), mainNo:v('f4_mainNo'), mainDia:v('f4_mainDia'),
+    pressure:v('f4_pressure'),
+    subMeters:F4_SUBS.filter(s=>(s.no||'').trim()||(s.dia||'').trim()),
+    use:v('f4_use'), useOther:v('f4_useOther'), meterLoc:v('f4_meterLoc'),
+    fireType:v('f4_fireType'), fireOther:v('f4_fireOther'), fireConnected:v('f4_fireConnected'),
+    sewageConnected:v('f4_sewageConnected'), sewageOk:v('f4_sewageOk'),
+    drainToSewage:v('f4_drainToSewage'),
+    pool:v('f4_pool'), poolToSewage:v('f4_poolToSewage'), poolConn:v('f4_poolConn'),
+    notes:v('f4_notes')
+  };
+  const {error}=await sb.from('tickets').update({form4:data}).eq('id',id);
+  if(error){
+    if(/form4/.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL של טופס 4');
+    else errToast(error);
+    return;
+  }
+  ticketById(id).form4=data;
+  await addHistory(id,'עדכון ממצאי בדיקה — טופס 4');
+  await loadAll(); render(); toast('✔ ממצאי הבדיקה נשמרו');
+}
+
+/* --- הפקת מסמך להדפסה וחתימה --- */
+function f4Print(id){
+  const t=ticketById(id), f=f4Get(t);
+  const row=(l,v)=>`<tr><th>${l}</th><td>${v||'—'}</td></tr>`;
+  const subs=(f.subMeters||[]).map((s,i)=>`<tr><th>מד משני ${i+1}</th><td>מספר: ${esc(s.no||'—')} · קוטר: ${esc(s.dia||'—')}</td></tr>`).join('');
+  const photos=Object.keys(F4_PHOTOS).map(k=>{
+    const list=(t.f4photos||{})[k]||[];
+    if(!list.length) return '';
+    return `<div class="pg"><h3>${F4_PHOTOS[k]}</h3><div class="imgs">${list.map(p=>`<img src="${p.url}">`).join('')}</div></div>`;
+  }).join('');
+  const html=`<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<title>טופס בדיקה לטופס 4 — ${t.number}</title>
+<style>
+@page{size:A4;margin:12mm}
+body{font-family:"Heebo",Arial,sans-serif;direction:rtl;color:#111;font-size:11pt;line-height:1.45;margin:0}
+.hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #0B4F6C;padding-bottom:8px;margin-bottom:12px}
+.hdr h1{font-size:16pt;color:#0B4F6C;margin:0}
+.hdr .sub{font-size:10pt;color:#555}
+.hdr img{height:56px}
+h2{font-size:12.5pt;color:#0B4F6C;margin:14px 0 5px;border-bottom:1px solid #ccc;padding-bottom:3px}
+table{width:100%;border-collapse:collapse;margin-bottom:4px}
+th,td{border:1px solid #ccc;padding:5px 8px;text-align:right;font-size:10.5pt}
+th{background:#F0F7FA;width:38%;font-weight:600}
+.imgs{display:flex;flex-wrap:wrap;gap:6px}
+.imgs img{max-width:31%;border:1px solid #ccc;border-radius:4px}
+.pg{margin-bottom:10px}
+.pg h3{font-size:11pt;color:#0B4F6C;margin:8px 0 4px}
+.sign{margin-top:24px;display:flex;gap:30px}
+.sign div{flex:1;border-top:1px solid #333;padding-top:5px;font-size:10pt}
+.foot{margin-top:14px;font-size:9pt;color:#666;text-align:center;border-top:1px solid #ddd;padding-top:6px}
+@media print{ .noprint{display:none} }
+</style></head><body>
+<div class="hdr">
+  <div><h1>טופס בדיקה לטופס 4</h1>
+    <div class="sub">${ORG_NAME} · מספר בדיקה <b dir="ltr">${t.number}</b> · ${fmtDT(t.createdAt)}</div></div>
+  <img src="${LOGO_SRC}" alt="">
+</div>
+
+<h2>פרטי הבקשה</h2>
+<table>
+  ${row('שם המבקש / היזם',esc(t.customerName||''))}
+  ${row('ת.ז / ח.פ',esc(t.customerId||''))}
+  ${row('טלפון נייד',esc(t.customerPhone||''))}
+  ${row('ישוב',esc(t.city||''))}
+  ${row('כתובת',esc(t.address||''))}
+  ${row('גוש',esc(t.blockNo||''))}
+  ${row('חלקה',esc(t.parcelNo||''))}
+</table>
+
+<h2>פרטי בדיקת מים</h2>
+<table>
+  ${row('האם הותקן מד מים ראשי',f4YN(f.mainInstalled))}
+  ${row('מספר מד המים',esc(f.mainNo||''))}
+  ${row('קוטר מד',esc(f.mainDia||''))}
+  ${subs}
+  ${row('מהות השימוש',esc(f.use==='אחר'?(f.useOther||'אחר'):(f.use||'')))}
+  ${row('לחץ מים במערכת (בר)',esc(f.pressure||''))}
+  ${row('מיקום המד',esc(f.meterLoc||''))}
+</table>
+
+<h2>מערכת כיבוי אש</h2>
+<table>
+  ${row('סוג המערכת',esc(f.fireType==='אחר'?(f.fireOther||'אחר'):(f.fireType||'')))}
+  ${row('מחוברת למערכת המים',f4YN(f.fireConnected))}
+</table>
+
+<h2>בדיקת ביוב וניקוז</h2>
+<table>
+  ${row('המבנה / המגרש מחובר למערכת ביוב',f4YN(f.sewageConnected))}
+  ${row('חיבור הביוב תקין (שיפוע / אטימות / מכסים)',f4YN(f.sewageOk))}
+  ${row('מערכת הניקוז מחוברת למערכת ביוב',f4YN(f.drainToSewage))}
+</table>
+
+<h2>בריכת שחיה</h2>
+<table>
+  ${row('קיימת בריכת שחיה פרטית',f4YN(f.pool))}
+  ${row('מחוברת למערכת ביוב',f4YN(f.poolToSewage))}
+  ${row('החיבור דרך',esc(f.poolConn||''))}
+</table>
+
+${f.notes?`<h2>הערות הבודק</h2><table>${row('הערות',esc(f.notes))}</table>`:''}
+
+${photos?`<h2>תיעוד מצולם</h2>${photos}`:''}
+
+<div class="sign">
+  <div>שם הבודק: ${esc(userName(t.assignedTo))}<br><br>חתימה: ______________</div>
+  <div>אישור מנהל: ______________<br><br>תאריך: ______________</div>
+</div>
+<div class="foot">${ORG_NAME} · מסמך זה הופק ממערכת ניהול הפניות והמשימות</div>
+<div class="noprint" style="text-align:center;margin-top:16px">
+  <button onclick="window.print()" style="font-family:inherit;font-size:14px;padding:10px 26px;border:none;border-radius:8px;background:#0B4F6C;color:#fff;cursor:pointer">🖨 הדפסה / שמירה כ-PDF</button>
+</div>
+</body></html>`;
+  const w=window.open('','_blank');
+  if(!w){ toast('החלון נחסם — יש לאשר חלונות קופצים בדפדפן'); return; }
+  w.document.write(html); w.document.close();
+}
+
 /* ---------- טיפול מתמשך (עבודה מתוכננת) ---------- */
 function openOngoing(id){
   const t=ticketById(id);
@@ -1942,23 +2240,39 @@ function openOngoing(id){
       <div style="margin-top:5px">שעון היעד הדחוף ייחתם עכשיו — המענה הראשוני נרשם כ<b>${slaState(t)==='ok'?'ניתן בתוך היעד':'ניתן באיחור'}</b>. מנהל יקבע את מועד הביצוע.</div></div>
     <div class="field"><label class="req">מה נדרש להשלמת הטיפול?</label>
       <textarea id="og_reason" rows="3" placeholder="לדוגמה: התגלה שבר בקו הביוב — נדרש קבלן להזמנת צינור וביצוע מסודר"></textarea></div>
+    <div class="field"><label class="req">מי ינהל את העבודה?</label>
+      <select id="og_mode" onchange="$('#og_owner_wrap').hidden=(this.value!=='transfer')">
+        <option value="self">אני אנהל את העבודה בעצמי</option>
+        <option value="transfer">העברה למנהלן</option>
+      </select>
+      <div class="hint">בניהול עצמי הפניה נשארת אצלך, ואתה קובע את מועד הביצוע ומלווה עד ההשלמה.</div></div>
+    <div class="field" id="og_owner_wrap" hidden><label class="req">בחירת מנהלן</label>
+      <select id="og_owner"><option value="">— בחר מנהלן —</option>
+        ${DB.users.filter(w=>w.active!==false&&(w.role==='manager'||w.role==='super')).sort((a,b)=>a.name.localeCompare(b.name,'he')).map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('')}
+      </select>
+      <div class="hint">הפניה תעבור אליו, והוא יקבע את מועד הביצוע.</div></div>
     <button class="btn btn-block" style="background:var(--transfer);color:#fff" id="og_btn" onclick="doOngoing('${id}')">העברה לטיפול מתמשך</button>`);
 }
 async function doOngoing(id){
   const reason=($('#og_reason')?.value||'').trim();
   if(!reason){ toast('יש לפרט מה נדרש להשלמת הטיפול'); return; }
   const btn=$('#og_btn'); if(btn){ btn.disabled=true; btn.textContent='מעדכן…'; }
+  const mode=($('#og_mode')?.value||'self');
+  const owner=mode==='transfer'?($('#og_owner')?.value||'').trim():ME.id;
+  if(mode==='transfer'&&!owner){ toast('יש לבחור מנהלן לקביעת מועד הביצוע'); if(btn){btn.disabled=false;btn.textContent='העברה לטיפול מתמשך';} return; }
   const t=ticketById(id), now=new Date().toISOString();
-  const {error}=await sb.from('tickets').update({status:'ongoing',ongoing_at:now,ongoing_reason:reason}).eq('id',id);
+  const upd={status:'ongoing',ongoing_at:now,ongoing_reason:reason,ongoing_owner:owner};
+  if(mode==='transfer') upd.assigned_to=owner;   /* ניהול עצמי: הפניה נשארת אצל המסמן */
+  const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){
     if(btn){ btn.disabled=false; btn.textContent='העברה לטיפול מתמשך'; }
     if(/ongoing|status_check/.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL של טיפול מתמשך');
     else errToast(error);
     return;
   }
-  await addHistory(id,'העברה לטיפול מתמשך',reason+' · מענה ראשוני '+(slaState(t)==='ok'?'בתוך היעד':'באיחור'));
+  await addHistory(id,'העברה לטיפול מתמשך',reason+' · '+(mode==='transfer'?'הועבר ל'+userName(owner):'בניהול עצמי של '+userName(owner))+' · מענה ראשוני '+(slaState(t)==='ok'?'בתוך היעד':'באיחור'));
   await loadAll(); closeModal(); render();
-  toast('הפניה הועברה לטיפול מתמשך — ממתינה לקביעת מועד ביצוע');
+  toast(mode==='transfer'?('הפניה הועברה לטיפול מתמשך אל '+userName(owner)):'הפניה סומנה כטיפול מתמשך — נותרה בניהולך');
 }
 async function savePlannedDate(id){
   const t=ticketById(id), d=($('#pd')?.value||'').trim();
