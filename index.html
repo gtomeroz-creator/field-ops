@@ -26,7 +26,7 @@
   --shadow:0 1px 3px rgba(11,79,108,.08),0 4px 14px rgba(11,79,108,.06);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
+html,body{height:100%;overflow-x:hidden;max-width:100%}
 body{font-family:'Heebo',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
 button{font-family:inherit;cursor:pointer;border:none;background:none;font-size:inherit}
 input,select,textarea{font-family:inherit;font-size:15px;width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);transition:border-color .15s}
@@ -71,21 +71,34 @@ label{display:block;font-weight:600;font-size:13.5px;margin-bottom:5px;color:var
 
 /* topbar */
 .topbar{background:linear-gradient(135deg,var(--primary) 0%,#0d6188 70%,#0f7ba8 100%);color:#fff;position:sticky;top:0;z-index:50}
-.topbar .wrap{display:flex;align-items:center;gap:12px;height:60px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16.5px}
+.topbar .wrap{display:flex;align-items:center;gap:12px;height:60px;min-width:0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16.5px;min-width:0}
+.brand>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar>.wrap>button{flex-shrink:0}
 .brand .logo{width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,.15);display:grid;place-items:center;font-size:18px}
 .topbar .spacer{flex:1}
-.topbar .who{font-size:13px;opacity:.9;text-align:left}
+.topbar .who{font-size:13px;opacity:.9;text-align:left;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
 .topbar button{color:#fff;opacity:.85;padding:8px}
 .topbar button:hover{opacity:1}
 
 /* tabs nav */
 .nav{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:60px;z-index:40;overflow-x:auto}
-.nav .wrap{display:flex;gap:4px;padding:0 8px}
+.nav{-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav .wrap{display:flex;gap:4px;padding:0 8px;margin:0;width:max-content;min-width:100%}
 .nav button{padding:13px 15px;font-weight:600;color:var(--text-2);border-bottom:2.5px solid transparent;white-space:nowrap;font-size:14px}
 .nav button.on{color:var(--primary);border-bottom-color:var(--primary)}
 
 main{padding:20px 0 90px}
+@media(max-width:620px){
+  .wrap{padding:0 12px}
+  .topbar .wrap{gap:7px;height:56px}
+  .brand{font-size:14px;gap:7px}
+  .brand img{height:31px!important}
+  .topbar .who{max-width:82px;font-size:11.5px;line-height:1.25}
+  .topbar>.wrap>button{padding:6px!important;font-size:15px!important}
+  .nav button{padding:12px 11px;font-size:13.5px}
+}
 
 /* stat cards */
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s}
@@ -190,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-05 א';
+const APP_VER='2026-08-05 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
