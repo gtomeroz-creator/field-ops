@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-06 ב';
+const APP_VER='2026-08-06 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1078,7 +1078,9 @@ function filteredTickets(u){
   if(f==='ongoing'){ list=list.filter(t=>t.status==='ongoing'&&(isMgr(u)||t.assignedTo===u.id));
     list.sort((a,b)=>(a.plannedDate||'9999').localeCompare(b.plannedDate||'9999')); }
   if(TF.domain) list=list.filter(t=>t.domain===TF.domain);
-  if(TF.status) list=list.filter(t=>t.status===TF.status);
+  /* 'late' אינו סטטוס אלא מצב: חרגה מיעד הטיפול (סגורה באיחור או פתוחה שעבר יעדה) */
+  if(TF.status==='late') list=list.filter(t=>slaState(t)==='late');
+  else if(TF.status) list=list.filter(t=>t.status===TF.status);
   if(TF.city) list=list.filter(t=>t.city===TF.city);
   if(TF.assignee) list=list.filter(t=>t.assignedTo===TF.assignee);   /* הגורם שהפניה אצלו כעת */
   if(TF.from){ const a=new Date(TF.from+'T00:00:00').getTime(); list=list.filter(t=>t.createdAt>=a); }
@@ -1146,7 +1148,7 @@ function csvFileName(){
   if(TF.assignee) parts.push(clean(userName(TF.assignee)));
   if(TF.arg&&ARG_LABELS[TF.arg]) parts.push(ARG_LABELS[TF.arg]);
   if(TF.domain) parts.push(DOMAINS[TF.domain].name);
-  if(TF.status) parts.push(STATUSES[TF.status]);
+  if(TF.status) parts.push(TF.status==='late'?'חריגה מיעד':STATUSES[TF.status]);
   if(TF.city) parts.push(TF.city);
   if(TF.from||TF.to) parts.push((TF.from||'')+'_עד_'+(TF.to||'היום'));
   return parts.join('_')+(TF.from||TF.to?'':'_'+new Date().toISOString().slice(0,10))+'.csv';
@@ -1321,7 +1323,7 @@ function vTickets(u){
   <div class="filters">
     <input id="f_q" placeholder="🔍 חיפוש מס׳ פניה / כתובת / לקוח" value="${esc(TF.q)}" oninput="applyFilters()">
     <select id="f_domain" onchange="applyFilters()"><option value="">כל הסיווגים</option><option value="W"${sel(TF.domain,'W')}>מים</option><option value="S"${sel(TF.domain,'S')}>ביוב</option><option value="G"${sel(TF.domain,'G')}>כללי</option></select>
-    <select id="f_status" onchange="applyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="ongoing"${sel(TF.status,'ongoing')}>בטיפול מתמשך</option><option value="done"${sel(TF.status,'done')}>הושלמה</option></select>
+    <select id="f_status" onchange="applyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="ongoing"${sel(TF.status,'ongoing')}>בטיפול מתמשך</option><option value="done"${sel(TF.status,'done')}>הושלמה</option><option value="late"${sel(TF.status,'late')}>⏰ חריגה מיעד</option></select>
     <select id="f_city" onchange="applyFilters()"><option value="">כל הישובים</option>${CITIES.map(c=>`<option${sel(TF.city,c)}>${c}</option>`).join('')}</select>
     ${canExport(u)?`<select id="f_assignee" onchange="applyFilters()" title="הגורם שהפניה נמצאת אצלו כעת"><option value="">כל הגורמים המטפלים</option>${assignable.map(w=>`<option value="${w.id}"${sel(TF.assignee,w.id)}>${esc(w.name)}${w.role==='contractor'?' (קבלן)':''}</option>`).join('')}</select>`:''}
   </div>
