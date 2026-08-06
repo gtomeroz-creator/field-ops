@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-06 ג';
+const APP_VER='2026-08-06 ד';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -918,7 +918,7 @@ function renderInner(u){
     case 'tickets': el.innerHTML=vTickets(u); break;
     case 'ticket': el.innerHTML=vTicket(u,VIEW.arg); startLiveTimers(); initTicketMap(VIEW.arg); break;
     case 'newTicket': NT_ALL=false; _ntFiles=[]; el.innerHTML=vNewTicket(u); break;
-    case 'map': el.innerHTML='<div class="card"><div class="section-t">🗺️ מפת פניות פתוחות</div><div id="bigmap" class="map-box" style="height:70dvh"></div></div>'; initBigMap(); break;
+    case 'map': el.innerHTML=vMap(u); initBigMap(); break;
     case 'board': el.innerHTML=vBoard(u); break;
     case 'reports': el.innerHTML=vReports(u); break;
     case 'users': el.innerHTML=vUsers(u); break;
@@ -1888,6 +1888,16 @@ async function setStatus(id,status){
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
   await loadAll(); render(); toast('הסטטוס עודכן: '+STATUSES[status]);
+  /* אירוע משותף: תחילת טיפול מסנכרנת גם את הפניה המקבילה */
+  if(status==='progress'&&t.linkedTicketId){
+    const lt=ticketById(t.linkedTicketId);
+    if(lt&&lt.status==='open'){
+      try{
+        const {data:num,error:se}=await sb.rpc('sync_linked_progress',{source_ticket:id});
+        if(!se&&num){ await loadAll(); render(); toast('גם הפניה המקבילה '+num+' סומנה כבטיפול'); }
+      }catch(e){}
+    }
+  }
   /* אירוע משותף: אם המקבילה עדיין פתוחה, מציעים לסגור גם אותה */
   if(status==='done'){
     const lt=t.linkedTicketId?ticketById(t.linkedTicketId):null;
@@ -2531,15 +2541,42 @@ function initTicketMap(id){
     L.marker([t.gps.lat,t.gps.lng]).addTo(m).bindPopup(t.number);
   }catch(e){}
 }
+/* ---------- מפת פניות (עם אותם סינונים כמו דף הפניות) ---------- */
+function vMap(u){
+  const list=filteredTickets(u), pts=list.filter(t=>t.gps);
+  const sel=(v,val)=>v===val?' selected':'';
+  return `
+  <div class="filters">
+    <input id="f_q" placeholder="🔍 חיפוש מס׳ פניה / כתובת / לקוח" value="${esc(TF.q)}" oninput="mapApplyFilters()">
+    <select id="f_domain" onchange="mapApplyFilters()"><option value="">כל הסיווגים</option><option value="W"${sel(TF.domain,'W')}>מים</option><option value="S"${sel(TF.domain,'S')}>ביוב</option><option value="G"${sel(TF.domain,'G')}>כללי</option></select>
+    <select id="f_status" onchange="mapApplyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="ongoing"${sel(TF.status,'ongoing')}>בטיפול מתמשך</option><option value="done"${sel(TF.status,'done')}>הושלמה</option><option value="late"${sel(TF.status,'late')}>⏰ חריגה מיעד</option></select>
+    <select id="f_city" onchange="mapApplyFilters()"><option value="">כל הישובים</option>${CITIES.map(c=>`<option${sel(TF.city,c)}>${c}</option>`).join('')}</select>
+    ${canExport(u)?`<select id="f_assignee" onchange="mapApplyFilters()"><option value="">כל הגורמים המטפלים</option>${DB.users.filter(w=>w.active!==false).sort((a,b)=>a.name.localeCompare(b.name,'he')).map(w=>`<option value="${w.id}"${sel(TF.assignee,w.id)}>${esc(w.name)}</option>`).join('')}</select>`:''}
+  </div>
+  <div class="card">
+    <div class="section-t">🗺️ מפת פניות — <span style="font-weight:400;color:var(--muted)">${pts.length} מוצגות במפה${list.length>pts.length?' (מתוך '+list.length+'; לשאר אין נ.צ)':''}</span>
+      ${tfActive()?'<button class="btn btn-outline btn-sm" style="padding:2px 10px;margin-inline-start:8px" onclick="clearFilters()">✕ ניקוי סינון</button>':''}</div>
+    <div id="bigmap" class="map-box" style="height:70dvh"></div>
+  </div>`;
+}
+function mapApplyFilters(){
+  TF.q=$('#f_q').value.trim().toLowerCase();
+  TF.domain=$('#f_domain').value;
+  TF.status=$('#f_status').value;
+  TF.city=$('#f_city').value;
+  if($('#f_assignee')) TF.assignee=$('#f_assignee').value;
+  render();
+}
 function initBigMap(){
   if(!window.L||!$('#bigmap')) return;
   try{
     const m=L.map('bigmap').setView([32.702,35.297],12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(m);
-    const pts=DB.tickets.filter(t=>t.gps&&t.status!=='done');
+    const pts=filteredTickets(ME).filter(t=>t.gps);
     pts.forEach(t=>{
-      L.marker([t.gps.lat,t.gps.lng]).addTo(m)
-        .bindPopup(`<b dir="ltr">${t.number}</b><br>${esc(t.type)} · ${esc(t.city)}<br><a href="javascript:route('ticket','${t.id}')">פתיחת כרטיס ←</a>`);
+      const col=t.status==='done'?'#15803D':(slaState(t)==='late'?'#DC2626':(t.status==='ongoing'?'#7c3aed':'#0B4F6C'));
+      L.circleMarker([t.gps.lat,t.gps.lng],{radius:9,color:'#fff',weight:2,fillColor:col,fillOpacity:.95}).addTo(m)
+        .bindPopup(`<b dir="ltr">${t.number}</b><br>${esc(t.type)} · ${esc(t.city)}<br>${STATUSES[t.status]}${slaState(t)==='late'?' · <b style="color:#DC2626">חריגה מיעד</b>':''}<br>${esc(userName(t.assignedTo))}<br><a href="javascript:route('ticket','${t.id}')">פתיחת כרטיס ←</a>`);
     });
     if(pts.length) m.fitBounds(pts.map(t=>[t.gps.lat,t.gps.lng]),{padding:[40,40]});
   }catch(e){}
