@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-06 א';
+const APP_VER='2026-08-06 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1905,7 +1905,7 @@ function offerCloseTwin(srcId,twinId){
       <button class="btn btn-success" style="flex:1" onclick="doCloseTwin('${srcId}')">✔ סגירת ${lt.number} גם</button>
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">להשאיר פתוחה</button>
     </div>
-    <div class="hint" style="margin-top:8px">התיעוד והתמונות של הפניה שנסגרה משמשים כתיעוד לשתיהן.</div>`);
+    <div class="hint" style="margin-top:8px">התיעוד והתמונות של הפניה שנסגרה משמשים כתיעוד לשתיהן, ומועד הסגירה נלקח ממנה — כך שלא תירשם חריגה מיותרת.</div>`);
 }
 async function doCloseTwin(srcId){
   const {data:num,error}=await sb.rpc('close_linked_twin',{source_ticket:srcId});
@@ -2349,6 +2349,12 @@ async function doLinkTicket(id){
   await addHistory(target,'קישור לאירוע משותף','קושרה לפניה '+t.number);
   await loadAll(); closeModal(); render();
   toast('✔ הפניות '+t.number+' ו-'+o.number+' קושרו כאירוע משותף');
+  /* אם אחת כבר סגורה והשנייה פתוחה — מציעים לסגור גם אותה */
+  const A=ticketById(id), B=ticketById(target);
+  if(A&&B){
+    if(A.status==='done'&&B.status!=='done') setTimeout(()=>offerCloseTwin(A.id,B.id),450);
+    else if(B.status==='done'&&A.status!=='done') setTimeout(()=>offerCloseTwin(B.id,A.id),450);
+  }
 }
 
 /* ---------- טיפול מתמשך (עבודה מתוכננת) ---------- */
