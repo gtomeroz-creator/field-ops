@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-05 ב';
+const APP_VER='2026-08-05 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1473,9 +1473,16 @@ async function doNewTicket(){
     let twin=null;
     if(parallel){
       twin=await createTicketCloud({...base, assignedTo:parallel});
-      await sb.rpc('link_tickets',{t1:t.id,t2:twin.id});
-      await addHistory(t.id,'פתיחה במקביל','מקושרת לפניה '+twin.number+' אצל '+userName(parallel));
-      await addHistory(twin.id,'פתיחה במקביל','מקושרת לפניה '+t.number+' אצל '+userName(primary));
+      /* קישור הזוג — אם נכשל, חובה לדעת: בלי קישור אין אירוע משותף ואין סגירה יחד */
+      let linkErr=(await sb.rpc('link_tickets',{t1:t.id,t2:twin.id})).error;
+      if(linkErr) linkErr=(await sb.rpc('link_outage_to_fault',{outage_id:t.id,fault_id:twin.id})).error;
+      if(linkErr){
+        await addHistory(t.id,'⚠️ קישור הפניות נכשל','יש לקשר ידנית לפניה '+twin.number);
+        toast('⚠️ הפניות נפתחו אך לא קושרו — יש לקשר ידנית מכרטיס הפניה');
+      }else{
+        await addHistory(t.id,'פתיחה במקביל','מקושרת לפניה '+twin.number+' אצל '+userName(parallel));
+        await addHistory(twin.id,'פתיחה במקביל','מקושרת לפניה '+t.number+' אצל '+userName(primary));
+      }
     }
     await loadAll();
     toast(twin?'נפתחו פניות מקבילות '+t.number+' + '+twin.number:'נפתחה פניה '+t.number);
@@ -1695,6 +1702,11 @@ function vTicket(u,id){
     :'<div class="hint" style="margin-top:8px">מועד הביצוע נקבע על ידי הגורם המנהל את העבודה.</div>'}
   </div>`:''}
 
+  ${!t.linkedTicketId&&isMgr(u)?`
+  <div class="card" style="margin-bottom:14px;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:13px;color:var(--muted)">פניה זו חלק מאירוע משותף עם פניה אחרת?</span>
+    <button class="btn btn-outline btn-sm" onclick="openLinkTicket('${t.id}')">🔗 קישור לפניה מקבילה</button>
+  </div>`:''}
   ${editable&&t.status!=='done'?`
   <div class="card" style="margin-bottom:14px">
     <div class="section-t">⚙️ עדכון סטטוס ופעולות</div>
@@ -2297,6 +2309,40 @@ ${photos?`<h2>תיעוד מצולם</h2>${photos}`:''}
   const w=window.open('','_blank');
   if(!w){ toast('החלון נחסם — יש לאשר חלונות קופצים בדפדפן'); return; }
   w.document.write(html); w.document.close();
+}
+
+/* ---------- קישור ידני של שתי פניות לאירוע משותף ---------- */
+function openLinkTicket(id){
+  const t=ticketById(id);
+  /* מועמדות: פניות אחרות שאינן מקושרות, באותו ישוב, מהחודש האחרון */
+  const cands=DB.tickets.filter(o=>o.id!==id&&!o.linkedTicketId&&o.city===t.city
+      &&Math.abs(o.createdAt-t.createdAt)<30*864e5)
+    .sort((a,b)=>Math.abs(a.createdAt-t.createdAt)-Math.abs(b.createdAt-t.createdAt)).slice(0,40);
+  showModal(`<h2>🔗 קישור לפניה מקבילה <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">קישור שתי פניות של <b>אותו אירוע</b>. לאחר הקישור הן יוצגו יחד במסגרת משותפת, וסגירת אחת תציע לסגור גם את השנייה.</div>
+    <div class="field"><label class="req">הפניה לקישור אל ${t.number}</label>
+      <select id="lk_target"><option value="">— בחר פניה —</option>
+        ${cands.map(o=>`<option value="${o.id}">${o.number} · ${esc(o.type)} · ${esc(userName(o.assignedTo))} · ${fmtDT(o.createdAt)}</option>`).join('')}
+      </select>
+      <div class="hint">מוצגות פניות מאותו ישוב שאינן מקושרות, מהחודש האחרון.</div></div>
+    <button class="btn btn-primary btn-block" id="lk_btn" onclick="doLinkTicket('${id}')">קישור הפניות</button>`);
+}
+async function doLinkTicket(id){
+  const target=($('#lk_target')?.value||'').trim();
+  if(!target){ toast('יש לבחור פניה לקישור'); return; }
+  const btn=$('#lk_btn'); if(btn){ btn.disabled=true; btn.textContent='מקשר…'; }
+  const t=ticketById(id), o=ticketById(target);
+  let err=(await sb.rpc('link_tickets',{t1:id,t2:target})).error;
+  if(err) err=(await sb.rpc('link_outage_to_fault',{outage_id:id,fault_id:target})).error;
+  if(err){
+    if(btn){ btn.disabled=false; btn.textContent='קישור הפניות'; }
+    errToast(err,'הקישור נכשל: '+(err.message||''));
+    return;
+  }
+  await addHistory(id,'קישור לאירוע משותף','קושרה לפניה '+o.number);
+  await addHistory(target,'קישור לאירוע משותף','קושרה לפניה '+t.number);
+  await loadAll(); closeModal(); render();
+  toast('✔ הפניות '+t.number+' ו-'+o.number+' קושרו כאירוע משותף');
 }
 
 /* ---------- טיפול מתמשך (עבודה מתוכננת) ---------- */
