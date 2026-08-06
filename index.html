@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-05 ג';
+const APP_VER='2026-08-06 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -2316,13 +2316,13 @@ function openLinkTicket(id){
   const t=ticketById(id);
   /* מועמדות: פניות אחרות שאינן מקושרות, באותו ישוב, מהחודש האחרון */
   const cands=DB.tickets.filter(o=>o.id!==id&&!o.linkedTicketId&&o.city===t.city
-      &&Math.abs(o.createdAt-t.createdAt)<30*864e5)
-    .sort((a,b)=>Math.abs(a.createdAt-t.createdAt)-Math.abs(b.createdAt-t.createdAt)).slice(0,40);
+      &&Math.abs(o.createdAt-t.createdAt)<60*864e5)
+    .sort((a,b)=>Math.abs(a.createdAt-t.createdAt)-Math.abs(b.createdAt-t.createdAt)).slice(0,60);
   showModal(`<h2>🔗 קישור לפניה מקבילה <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-info">קישור שתי פניות של <b>אותו אירוע</b>. לאחר הקישור הן יוצגו יחד במסגרת משותפת, וסגירת אחת תציע לסגור גם את השנייה.</div>
     <div class="field"><label class="req">הפניה לקישור אל ${t.number}</label>
       <select id="lk_target"><option value="">— בחר פניה —</option>
-        ${cands.map(o=>`<option value="${o.id}">${o.number} · ${esc(o.type)} · ${esc(userName(o.assignedTo))} · ${fmtDT(o.createdAt)}</option>`).join('')}
+        ${cands.map(o=>`<option value="${o.id}">${o.number} · ${esc(o.type)} · ${esc(userName(o.assignedTo))} · ${STATUSES[o.status]} · ${fmtDT(o.createdAt)}</option>`).join('')}
       </select>
       <div class="hint">מוצגות פניות מאותו ישוב שאינן מקושרות, מהחודש האחרון.</div></div>
     <button class="btn btn-primary btn-block" id="lk_btn" onclick="doLinkTicket('${id}')">קישור הפניות</button>`);
@@ -2332,11 +2332,17 @@ async function doLinkTicket(id){
   if(!target){ toast('יש לבחור פניה לקישור'); return; }
   const btn=$('#lk_btn'); if(btn){ btn.disabled=true; btn.textContent='מקשר…'; }
   const t=ticketById(id), o=ticketById(target);
-  let err=(await sb.rpc('link_tickets',{t1:id,t2:target})).error;
-  if(err) err=(await sb.rpc('link_outage_to_fault',{outage_id:id,fault_id:target})).error;
+  /* קישור מנהלים — עובד גם על פניות שנפתחו ע"י אחרים */
+  let err=(await sb.rpc('admin_link_tickets',{t1:id,t2:target})).error;
+  if(err&&/does not exist/i.test(err.message||'')){
+    /* טרם הותקנה התוספת — ניסיון במנגנונים הישנים */
+    err=(await sb.rpc('link_tickets',{t1:id,t2:target})).error;
+    if(err) err=(await sb.rpc('link_outage_to_fault',{outage_id:id,fault_id:target})).error;
+    if(err) err={message:'יש להריץ את תוספת ה-SQL לקישור פניות ע"י מנהל'};
+  }
   if(err){
     if(btn){ btn.disabled=false; btn.textContent='קישור הפניות'; }
-    errToast(err,'הקישור נכשל: '+(err.message||''));
+    toast('הקישור נכשל: '+(err.message||''));
     return;
   }
   await addHistory(id,'קישור לאירוע משותף','קושרה לפניה '+o.number);
