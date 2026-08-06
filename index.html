@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-06 ד';
+const APP_VER='2026-08-06 ה';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1704,6 +1704,19 @@ function vTicket(u,id){
     :'<div class="hint" style="margin-top:8px">מועד הביצוע נקבע על ידי הגורם המנהל את העבודה.</div>'}
   </div>`:''}
 
+  ${(()=>{const lt=t.linkedTicketId?ticketById(t.linkedTicketId):null;
+    if(!lt) return '';
+    if(t.status==='done'&&lt.status!=='done')
+      return `<div class="card" style="margin-bottom:14px;border-color:#F0D48A;background:#FFFBEB;padding:11px 14px">
+        <b style="font-size:13.5px">🔗 הפניה המקבילה עדיין פתוחה</b>
+        <div style="font-size:13px;margin:4px 0 8px">${lt.number} · ${esc(userName(lt.assignedTo))} · ${STATUSES[lt.status]} — אותו אירוע.</div>
+        <button class="btn btn-success btn-sm" onclick="doCloseTwin('${t.id}')">✔ סגירת ${lt.number} גם</button></div>`;
+    if(t.status!=='done'&&lt.status==='done')
+      return `<div class="card" style="margin-bottom:14px;border-color:#F0D48A;background:#FFFBEB;padding:11px 14px">
+        <b style="font-size:13.5px">🔗 הפניה המקבילה כבר נסגרה</b>
+        <div style="font-size:13px;margin:4px 0 8px">${lt.number} · ${esc(userName(lt.assignedTo))} — אם העבודה הושלמה, ניתן לסגור גם פניה זו.</div>
+        <button class="btn btn-success btn-sm" onclick="doCloseTwin('${lt.id}')">✔ סגירת פניה זו גם</button></div>`;
+    return '';})()}
   ${!t.linkedTicketId&&isMgr(u)?`
   <div class="card" style="margin-bottom:14px;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <span style="font-size:13px;color:var(--muted)">פניה זו חלק מאירוע משותף עם פניה אחרת?</span>
@@ -1915,9 +1928,18 @@ function offerCloseTwin(srcId,twinId){
       <div style="margin-top:5px">מדובר באותו אירוע — האם לסגור גם אותה?</div></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-success" style="flex:1" onclick="doCloseTwin('${srcId}')">✔ סגירת ${lt.number} גם</button>
-      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">להשאיר פתוחה</button>
+      <button class="btn btn-outline" style="flex:1" onclick="declineCloseTwin('${srcId}','${twinId}')">להשאיר פתוחה</button>
     </div>
     <div class="hint" style="margin-top:8px">התיעוד והתמונות של הפניה שנסגרה משמשים כתיעוד לשתיהן, ומועד הסגירה נלקח ממנה — כך שלא תירשם חריגה מיותרת.</div>`);
+}
+async function declineCloseTwin(srcId,twinId){
+  closeModal();
+  try{
+    const s=ticketById(srcId), tw=ticketById(twinId);
+    await addHistory(twinId,'הושארה פתוחה במכוון','הפניה המקבילה '+(s?s.number:'')+' נסגרה; הגורם בחר להשאיר פניה זו פתוחה');
+    await loadAll(); render();
+  }catch(e){}
+  toast('הפניה המקבילה נשארה פתוחה');
 }
 async function doCloseTwin(srcId){
   const {data:num,error}=await sb.rpc('close_linked_twin',{source_ticket:srcId});
@@ -2721,6 +2743,27 @@ function vReports(u){
     <table class="rep">${typeRows('G').map(x=>`<tr${x.n===0?' style="opacity:.5"':''}><td>${esc(x.tp)}</td><td><b>${x.n}</b></td></tr>`).join('')}
       <tr><td><b>סה"כ כללי</b></td><td><b>${T.filter(t=>t.domain==='G').length}</b></td></tr></table>
   </div>
+  ${(()=>{
+    /* זוגות מקושרים שאחת נסגרה והשנייה לא — לאיתור ותיקון במקום אחד */
+    const pairs=[];
+    T.forEach(a=>{
+      if(a.status!=='done'||!a.linkedTicketId) return;
+      const b=ticketById(a.linkedTicketId);
+      if(b&&b.linkedTicketId===a.id&&b.status!=='done') pairs.push([a,b]);
+    });
+    if(!pairs.length) return '';
+    return `
+  <div class="card" style="margin-top:14px;border-color:#F0D48A">
+    <div class="section-t">🔗 אירועים משותפים שלא נסגרו במלואם (${pairs.length})</div>
+    <div class="hint" style="margin-bottom:6px">בכל זוג אחת הפניות נסגרה והשנייה עדיין פתוחה. אם העבודה הושלמה — אפשר לסגור מכאן.</div>
+    <table class="rep"><tr><th>נסגרה</th><th>עדיין פתוחה</th><th>מטפל</th><th></th></tr>
+      ${pairs.map(([a,b])=>`<tr style="background:#FFFBEB">
+        <td><b dir="ltr">${a.number}</b><div class="hint">${fmtDT(a.completedAt)}</div></td>
+        <td><b dir="ltr">${b.number}</b><div class="hint">${esc(b.type)} · ${esc(b.city)}</div></td>
+        <td>${esc(userName(b.assignedTo))}</td>
+        <td><button class="btn btn-success btn-sm" style="padding:2px 9px" onclick="doCloseTwin('${a.id}')">✔ סגירה</button></td></tr>`).join('')}
+    </table>
+  </div>`;})()}
   ${(()=>{
     const og=T.filter(t=>t.status==='ongoing');
     if(!og.length) return '';
