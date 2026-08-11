@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-07 ג';
+const APP_VER='2026-08-07 ד';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1729,11 +1729,12 @@ function vTicket(u,id){
       ${!isForm4(t)&&t.status!=='progress'?`<button class="btn btn-warn" onclick="setStatus('${t.id}','progress')">▶ התחלת טיפול</button>`:''}
       ${isForm4(t)?'':`<button class="btn btn-success" onclick="setStatus('${t.id}','done')">✔ סימון הושלמה</button>`}
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
+      ${isForm4(t)&&isMgr(u)&&t.status!=='done'?`<button class="btn btn-success" onclick="f4Close('${t.id}')">✔ סיום התהליך וסגירת הטופס</button>`:''}
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>`}
       ${!isForm4(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
       ${!isForm4(t)&&t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
-    <div class="hint" style="margin-top:8px">${isForm4(t)?'ניתן להעביר את הממצאים לגורם אחר בתאגיד להמשך טיפול. סגירת הטופס אינה מחייבת תמונת "אחרי" — התיעוד הוא תמונות המקטעים.':'סגירת פניה מחייבת תמונת "אחרי" (נאכף גם בשרת). לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
+    <div class="hint" style="margin-top:8px">${isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.'):'סגירת פניה מחייבת תמונת "אחרי" (נאכף גם בשרת). לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
     ${isForm4(t)?'':`<div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
       <textarea id="wlog" rows="3" onchange="saveWorkLog('${t.id}')">${esc(t.workLog)}</textarea></div>`}
   </div>`:''}
@@ -2113,7 +2114,7 @@ function f4Card(u,t){
       </dl>
       ${Object.keys(F4_PHOTOS).map(k=>((t.f4photos||{})[k]||[]).length?`<div style="margin-top:10px"><b style="font-size:13px">${F4_PHOTOS[k]}</b>${f4PhotoBlock(t,k,false)}</div>`:'').join('')}
       <button class="btn btn-outline btn-block" style="margin-top:12px" onclick="f4Print('${t.id}')">🖨 הפקת מסמך להדפסה וחתימה</button>
-      ${isMgr(u)&&t.status!=='done'?`<button class="btn btn-success btn-block" style="margin-top:8px" onclick="f4Close('${t.id}')">✔ סיום הבדיקה וסגירת הטופס</button>`:''}
+
     </div>`;
   }
 
@@ -2213,10 +2214,10 @@ function f4Card(u,t){
       <button class="btn btn-primary" style="flex:1" onclick="f4Save('${t.id}')">💾 שמירת ממצאי הבדיקה</button>
       <button class="btn btn-outline" onclick="f4Print('${t.id}')">🖨 הפקת מסמך</button>
     </div>
-    ${isMgr(u)?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
-      <button class="btn btn-success btn-block" onclick="f4Close('${t.id}')">✔ סיום הבדיקה וסגירת הטופס</button>
-      <div class="hint" style="margin-top:4px">סגירת הטופס מיועדת למנהל, לאחר שהתהליך הושלם. איש השטח ממלא ומעביר הלאה.</div></div>`
-    :'<div class="hint" style="margin-top:10px">בסיום המילוי — יש להעביר את הטופס לגורם הממשיך בתאגיד (כפתור "העברה לגורם אחר").</div>'}
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <button class="btn btn-success btn-block" style="padding:14px;font-size:16px" onclick="openTransfer('${t.id}')">↪ סיימתי למלא — העברה לגורם הממשיך</button>
+      <div class="hint" style="margin-top:5px;text-align:center">בסיום המילוי מעבירים את הטופס לגורם שממשיך את התהליך. סגירת הטופס נעשית ע"י מנהל, בתום התהליך.</div>
+    </div>
   </div>`;
 }
 
