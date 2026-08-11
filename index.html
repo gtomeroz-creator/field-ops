@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-07 א';
+const APP_VER='2026-08-07 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1726,8 +1726,8 @@ function vTicket(u,id){
   <div class="card" style="margin-bottom:14px">
     <div class="section-t">⚙️ עדכון סטטוס ופעולות</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      ${t.status!=='progress'?`<button class="btn btn-warn" onclick="setStatus('${t.id}','progress')">▶ התחלת טיפול</button>`:''}
-      <button class="btn btn-success" onclick="setStatus('${t.id}','done')">✔ סימון הושלמה</button>
+      ${!isForm4(t)&&t.status!=='progress'?`<button class="btn btn-warn" onclick="setStatus('${t.id}','progress')">▶ התחלת טיפול</button>`:''}
+      ${isForm4(t)?'':`<button class="btn btn-success" onclick="setStatus('${t.id}','done')">✔ סימון הושלמה</button>`}
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>`}
       ${!isForm4(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
@@ -2039,10 +2039,13 @@ function f4PhotoBlock(t,kind,editable){
 }
 function f4AddPhotos(ev,id,kind){
   const files=[...ev.target.files]; if(!files.length) return;
-  toast('מעלה תמונות…');
-  compressImages(files,async list=>{
-    try{ await uploadDataUrls(id,kind,list); await loadAll(); render(); toast('התמונות נוספו'); }
-    catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
+  toast('שומר ומעלה תמונות…');
+  /* קודם שומרים את מה שכבר מולא — העלאת תמונה מרעננת את המסך */
+  f4Save(id,true).then(()=>{
+    compressImages(files,async list=>{
+      try{ await uploadDataUrls(id,kind,list); await loadAll(); render(); toast('התמונות נוספו והממצאים נשמרו'); }
+      catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
+    });
   });
   ev.target.value='';
 }
@@ -2110,6 +2113,7 @@ function f4Card(u,t){
       </dl>
       ${Object.keys(F4_PHOTOS).map(k=>((t.f4photos||{})[k]||[]).length?`<div style="margin-top:10px"><b style="font-size:13px">${F4_PHOTOS[k]}</b>${f4PhotoBlock(t,k,false)}</div>`:'').join('')}
       <button class="btn btn-outline btn-block" style="margin-top:12px" onclick="f4Print('${t.id}')">🖨 הפקת מסמך להדפסה וחתימה</button>
+      ${isMgr(u)&&t.status!=='done'?`<button class="btn btn-success btn-block" style="margin-top:8px" onclick="f4Close('${t.id}')">✔ סיום הבדיקה וסגירת הטופס</button>`:''}
     </div>`;
   }
 
@@ -2209,10 +2213,15 @@ function f4Card(u,t){
       <button class="btn btn-primary" style="flex:1" onclick="f4Save('${t.id}')">💾 שמירת ממצאי הבדיקה</button>
       <button class="btn btn-outline" onclick="f4Print('${t.id}')">🖨 הפקת מסמך</button>
     </div>
+    ${isMgr(u)?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <button class="btn btn-success btn-block" onclick="f4Close('${t.id}')">✔ סיום הבדיקה וסגירת הטופס</button>
+      <div class="hint" style="margin-top:4px">סגירת הטופס מיועדת למנהל, לאחר שהתהליך הושלם. איש השטח ממלא ומעביר הלאה.</div></div>`
+    :'<div class="hint" style="margin-top:10px">בסיום המילוי — יש להעביר את הטופס לגורם הממשיך בתאגיד (כפתור "העברה לגורם אחר").</div>'}
   </div>`;
 }
 
-async function f4Save(id){
+async function f4Save(id,silent){
+  if(!$('#f4_mainInstalled')) return;   /* הטופס אינו במצב עריכה */
   const v=s=>($('#'+s)?.value||'').trim();
   const data={
     mainInstalled:v('f4_mainInstalled'), mainNo:v('f4_mainNo'), mainDia:v('f4_mainDia'),
@@ -2235,8 +2244,21 @@ async function f4Save(id){
     return;
   }
   ticketById(id).form4=data;
+  if(silent) return;                       /* שמירה שקטה לפני העלאת תמונות */
   await addHistory(id,'עדכון ממצאי בדיקה — טופס 4');
   await loadAll(); render(); toast('✔ הממצאים נשמרו — אפשר להמשיך לערוך בהמשך');
+}
+
+async function f4Close(id){
+  await f4Save(id,true);                       /* לא לאבד מילוי שטרם נשמר */
+  const {error}=await sb.from('tickets').update({status:'done'}).eq('id',id);
+  if(error){
+    if(/תמונת/.test(error.message)) toast('יש להריץ את תוספת ה-SQL של טופס 4 (חלק 3) — היא מבטלת את דרישת תמונת "אחרי"');
+    else errToast(error);
+    return;
+  }
+  await addHistory(id,'סיום בדיקה — טופס 4','הטופס נסגר לאחר השלמת התהליך');
+  await loadAll(); render(); toast('✔ הטופס נסגר');
 }
 
 /* --- הפקת מסמך להדפסה וחתימה --- */
