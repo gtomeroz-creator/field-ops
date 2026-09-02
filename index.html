@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-07 ד';
+const APP_VER='2026-08-11 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -433,9 +433,14 @@ async function loadAll(){
     /* קישורים חתומים לתמונות (התוקף שעה; נטען מחדש בכל רענון) */
     const paths=ph.data.map(p=>p.path);
     let urlMap={};
-    if(paths.length){
-      const {data:signed}=await sb.storage.from('ticket-photos').createSignedUrls(paths,3600);
-      (signed||[]).forEach(s=>{ if(s.signedUrl) urlMap[s.path]=s.signedUrl; });
+    /* יצירת הקישורים במנות: בקשה אחת מוגבלת ל-1000 פריטים,
+       ומעבר לכך התמונות האחרונות נשארות בלי קישור */
+    for(let i=0;i<paths.length;i+=500){
+      const batch=paths.slice(i,i+500);
+      try{
+        const {data:signed}=await sb.storage.from('ticket-photos').createSignedUrls(batch,3600);
+        (signed||[]).forEach(s=>{ if(s.signedUrl) urlMap[s.path]=s.signedUrl; });
+      }catch(e){}
     }
 
     const histBy={}, photosBy={};
