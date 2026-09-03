@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-11 א';
+const APP_VER='2026-08-11 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -295,7 +295,7 @@ function toast(msg){
 }
 function errToast(e,fallback){
   const m=(e&&e.message)||'';
-  if(/תמונת "אחרי"/.test(m)){ toast('⚠️ לא ניתן לסמן "הושלמה" ללא תמונת "אחרי"'); return; }
+
   if(/Failed to fetch|NetworkError|network/i.test(m)){ toast('אין תקשורת לשרת — נסו שוב כשחוזרת קליטה'); return; }
   toast(fallback||('שגיאה: '+m));
 }
@@ -1732,14 +1732,14 @@ function vTicket(u,id){
     <div class="section-t">⚙️ עדכון סטטוס ופעולות</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       ${!isForm4(t)&&t.status!=='progress'?`<button class="btn btn-warn" onclick="setStatus('${t.id}','progress')">▶ התחלת טיפול</button>`:''}
-      ${isForm4(t)?'':`<button class="btn btn-success" onclick="setStatus('${t.id}','done')">✔ סימון הושלמה</button>`}
+      ${isForm4(t)?'':`<button class="btn btn-success" onclick="confirmClose('${t.id}')">✔ סימון הושלמה</button>`}
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       ${isForm4(t)&&isMgr(u)&&t.status!=='done'?`<button class="btn btn-success" onclick="f4Close('${t.id}')">✔ סיום התהליך וסגירת הטופס</button>`:''}
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>`}
       ${!isForm4(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
       ${!isForm4(t)&&t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
-    <div class="hint" style="margin-top:8px">${isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.'):'סגירת פניה מחייבת תמונת "אחרי" (נאכף גם בשרת). לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
+    <div class="hint" style="margin-top:8px">${isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.'):'מומלץ לצרף תמונת "אחרי" ולתעד נ.צ לפני הסגירה. לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
     ${isForm4(t)?'':`<div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
       <textarea id="wlog" rows="3" onchange="saveWorkLog('${t.id}')">${esc(t.workLog)}</textarea></div>`}
   </div>`:''}
@@ -1898,14 +1898,41 @@ async function delPhoto(id,kind,photoId,path){
 }
 
 /* ---------- פעולות על פניה ---------- */
+/* ---------- תזכורת תיעוד לפני סגירת פניה ---------- */
+function confirmClose(id){
+  const t=ticketById(id);
+  const noPhoto=t.photosAfter.length===0, noGps=!t.gps;
+  if(!noPhoto&&!noGps){ setStatus(id,'done'); return; }   /* התיעוד מלא — סוגרים ישירות */
+  const missing=(noPhoto&&noGps)?'ללא תמונה וללא מיקום':(noPhoto?'ללא תמונה':'ללא מיקום');
+  showModal(`<h2>📷 תיעוד חסר <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-warn" style="font-size:14px;line-height:1.6">
+      שים לב — הפניה נסגרת <b>${missing}</b>.<br>
+      תיעוד מדויק עוזר לנו להשתפר, למנוע ולמפות תקלות חוזרות.<br>
+      <b>מומלץ להוסיף תמונה ולציין מיקום לפני סגירת הפניה.</b>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      ${noPhoto?`<label class="btn btn-water btn-sm" style="flex:1;margin:0">📷 הוספת תמונת "אחרי"
+        <input type="file" accept="image/*" capture="environment" multiple hidden onchange="closeModal();addPhoto(event,'${id}','after')"></label>`:''}
+      ${noGps?`<button class="btn btn-outline btn-sm" style="flex:1" onclick="closeModal();grabTicketGPS('${id}')">📍 תיעוד נ.צ ביצוע</button>`:''}
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-outline" style="flex:1" onclick="closeModal()">↩ חזרה לפניה להשלמת תיעוד</button>
+      <button class="btn btn-success" style="flex:1" onclick="closeModal();setStatus('${id}','done')">✔ סגירה בכל זאת</button>
+    </div>`);
+}
 async function setStatus(id,status){
   const t=ticketById(id);
   if(!canEdit(ME,t)){ toast('רק הגורם המטפל יכול לעדכן פניה זו'); return; }
-  if(status==='done' && t.photosAfter.length===0){ toast('⚠️ לא ניתן לסמן "הושלמה" ללא תמונת "אחרי"'); return; }
+
   const upd={status};
   if(status==='done'&&$('#wlog')) upd.work_log=$('#wlog').value;
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
+  if(status==='done'){
+    const np=t.photosAfter.length===0, ng=!t.gps;
+    if(np||ng){ try{ await addHistory(id,'נסגרה ללא תיעוד מלא',
+      [np?'ללא תמונת "אחרי"':'',ng?'ללא נ.צ':''].filter(Boolean).join(' · ')); }catch(e){} }
+  }
   await loadAll(); render(); toast('הסטטוס עודכן: '+STATUSES[status]);
   /* אירוע משותף: תחילת טיפול מסנכרנת גם את הפניה המקבילה */
   if(status==='progress'&&t.linkedTicketId){
