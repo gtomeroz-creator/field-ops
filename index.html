@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-12 א';
+const APP_VER='2026-08-12 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -255,7 +255,7 @@ const isDispatchLike=u=>u&&(u.role==='super'||u.role==='manager'||u.role==='disp
 const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor');
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
 const TYPES={
-  W:['נזילה / פיצוץ מים','החלפת מונה שבור','בדיקת שטח למד מים','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
+  W:['נזילה','פיצוץ','תלונת צרכן - אין מים','החלפת מונה שבור','בדיקת שטח למד מים','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
   G:['אי החזרת המצב לקדמותו','טופס בדיקה לטופס 4']
 };
@@ -264,9 +264,12 @@ const isForm4=t=>t&&t.type===FORM4;
 /* פניה שנפתחה ע"י מוקדן = "פניית מוקד"; כל השאר = "פקודת עבודה" */
 const openedByDispatcher=t=>{ const u=t&&userById(t.createdBy); return !!u&&u.role==='dispatcher'; };
 const ticketTerm=t=>openedByDispatcher(t)?'פניית מוקד':'פקודת עבודה';
+/* סוגים שהוחלפו — אינם מוצעים בפתיחת פניה, אך נשמרים לדוחות היסטוריים */
+const LEGACY_TYPES={W:['נזילה / פיצוץ מים']};
 const F4_PHOTOS={f4_main_meter:'מד מים ראשי',f4_sub_meters:'מדי מים משניים',f4_meter_location:'מיקום המד',f4_fire:'מערכת כיבוי אש',f4_sewage:'בדיקת ביוב',f4_drainage:'מערכת ניקוז',f4_pool_water:'בריכה — חיבור מים',f4_pool:'בריכה — חיבור ביוב'};
 const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים'};
 const TYPE_AREA={
+ 'נזילה':'faults','פיצוץ':'faults','תלונת צרכן - אין מים':'faults',
  'נזילה / פיצוץ מים':'faults','גלישת ביוב':'faults','שבר בשוחה / במכסה שוחה':'faults',
  'תלונה על ריח':'faults','אחר':'faults',
  'תלונה על איכות מים':'water_quality',
@@ -2935,7 +2938,11 @@ function vReports(u){
     })
     .sort((a,b)=>b.total-a.total);
   /* פניות לפי סוג — מפוצל לפי סיווג, כולל סוגים עם 0 */
-  const typeRows=dom=>TYPES[dom].map(tp=>({tp,n:T.filter(t=>t.domain===dom&&t.type===tp).length}));
+  const typeRows=dom=>{
+    const legacy=(LEGACY_TYPES[dom]||[]).filter(tp=>T.some(t=>t.domain===dom&&t.type===tp));
+    return [...TYPES[dom],...legacy].map(tp=>({tp,n:T.filter(t=>t.domain===dom&&t.type===tp).length,
+      old:legacy.includes(tp)}));
+  };
   return `
   <div class="card" style="margin-bottom:14px">
     <div class="section-t">📅 טווח הדוח — <span style="font-weight:400;color:var(--muted)">${rangeLabel}</span></div>
@@ -2975,7 +2982,7 @@ function vReports(u){
   <div class="grid grid-2">
     <div class="card">
       <div class="section-t">💧 פניות מים לפי סוג</div>
-      <table class="rep">${typeRows('W').map(x=>`<tr${x.n===0?' style="opacity:.5"':''}><td>${esc(x.tp)}</td><td><b>${x.n}</b></td></tr>`).join('')}
+      <table class="rep">${typeRows('W').map(x=>`<tr${x.n===0?' style="opacity:.5"':''}><td>${esc(x.tp)}${x.old?' <span class="hint">(סוג קודם)</span>':''}</td><td><b>${x.n}</b></td></tr>`).join('')}
         <tr><td><b>סה"כ מים</b></td><td><b>${T.filter(t=>t.domain==='W').length}</b></td></tr></table>
     </div>
     <div class="card">
