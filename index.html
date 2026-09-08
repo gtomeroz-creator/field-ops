@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-11 ב';
+const APP_VER='2026-08-12 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -255,12 +255,15 @@ const isDispatchLike=u=>u&&(u.role==='super'||u.role==='manager'||u.role==='disp
 const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor');
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
 const TYPES={
-  W:['נזילה / פיצוץ מים','החלפת מונה שבור','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
+  W:['נזילה / פיצוץ מים','החלפת מונה שבור','בדיקת שטח למד מים','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
   G:['אי החזרת המצב לקדמותו','טופס בדיקה לטופס 4']
 };
 const FORM4='טופס בדיקה לטופס 4';
 const isForm4=t=>t&&t.type===FORM4;
+/* פניה שנפתחה ע"י מוקדן = "פניית מוקד"; כל השאר = "פקודת עבודה" */
+const openedByDispatcher=t=>{ const u=t&&userById(t.createdBy); return !!u&&u.role==='dispatcher'; };
+const ticketTerm=t=>openedByDispatcher(t)?'פניית מוקד':'פקודת עבודה';
 const F4_PHOTOS={f4_main_meter:'מד מים ראשי',f4_sub_meters:'מדי מים משניים',f4_meter_location:'מיקום המד',f4_fire:'מערכת כיבוי אש',f4_sewage:'בדיקת ביוב',f4_drainage:'מערכת ניקוז',f4_pool_water:'בריכה — חיבור מים',f4_pool:'בריכה — חיבור ביוב'};
 const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים'};
 const TYPE_AREA={
@@ -268,7 +271,7 @@ const TYPE_AREA={
  'תלונה על ריח':'faults','אחר':'faults',
  'תלונה על איכות מים':'water_quality',
  'הפסקת מים':'dispatch',  /* מטופל ע"י מוקדנים - סינון מיוחד */
- 'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters',
+ 'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters','בדיקת שטח למד מים':'meters',
  'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections',
  'טופס בדיקה לטופס 4':'connections'
 };
@@ -369,7 +372,7 @@ function ticketWaText(t){
     return lines.join('\n');
   }
   const lines=[
-    '🔧 פקודת עבודה '+t.number,
+    '🔧 '+ticketTerm(t)+' '+t.number,
     'סוג: '+t.type+' ('+DOMAINS[t.domain].name+')',
     'ישוב: '+t.city+(t.address?' · '+t.address:''),
     'מטפל: '+userName(t.assignedTo),
@@ -922,7 +925,7 @@ function renderInner(u){
     case 'home': el.innerHTML=vHome(u); break;
     case 'tickets': el.innerHTML=vTickets(u); break;
     case 'ticket': el.innerHTML=vTicket(u,VIEW.arg); startLiveTimers(); initTicketMap(VIEW.arg); break;
-    case 'newTicket': NT_ALL=false; _ntFiles=[]; el.innerHTML=vNewTicket(u); break;
+    case 'newTicket': NT_ALL=false; _ntFiles=[]; _gpsTmp=null; el.innerHTML=vNewTicket(u); break;
     case 'map': el.innerHTML=vMap(u); initBigMap(); break;
     case 'board': el.innerHTML=vBoard(u); break;
     case 'reports': el.innerHTML=vReports(u); break;
@@ -1017,6 +1020,7 @@ function trow(t,inWrap){
   return `<div class="trow${lt&&!inWrap?' trow-linked':''}${inWrap?' trow-inwrap':''}" onclick="route('ticket','${t.id}')">
     <div class="top">
       <span class="tnum" dir="ltr">${t.number}</span>
+      <span class="chip ${openedByDispatcher(t)?'chip-progress':'chip-general'}" style="font-size:10.5px">${ticketTerm(t)}</span>
       <span class="chip ${d.chip}">${d.name}</span>
       <span class="chip ${STATUS_CHIP[t.status]}">${STATUSES[t.status]}</span>
       ${late&&t.status!=='done'?'<span class="chip chip-late">⏰ חריגה מיעד</span>':''}
@@ -1401,6 +1405,22 @@ function vNewTicket(u){
       <div class="field"><label>גוש</label><input id="nt_block" inputmode="numeric"></div>
       <div class="field"><label>חלקה</label><input id="nt_parcel" inputmode="numeric"></div>
     </div>
+    <div class="field"><label>מיקום גאוגרפי (לא חובה)</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <button class="btn btn-outline btn-sm" onclick="grabGPS('nt')">📍 מיקום GPS נוכחי</button>
+        <button class="btn btn-outline btn-sm" onclick="ntToggleManualGps()">⌨ הקלדת נקודות ציון</button>
+        <span id="nt_gps" class="hint"></span>
+      </div>
+      <div id="nt_gps_manual" hidden>
+        <div class="grid grid-2" style="gap:8px">
+          <div class="field" style="margin:0"><label>X (מזרח / קו אורך)</label>
+            <input id="nt_x" inputmode="decimal" dir="ltr" style="text-align:left" placeholder="228416 או 35.3021"></div>
+          <div class="field" style="margin:0"><label>Y (צפון / קו רוחב)</label>
+            <input id="nt_y" inputmode="decimal" dir="ltr" style="text-align:left" placeholder="733948 או 32.7015"></div>
+        </div>
+        <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="ntApplyManualGps()">קליטת הנקודה</button>
+        <div class="hint">ניתן להזין רשת ישראל (ITM) או קו אורך/רוחב — המערכת מזהה אוטומטית.</div>
+      </div></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label>קבצים מצורפים (תמונות ומסמכי PDF)</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -1473,6 +1493,7 @@ async function doNewTicket(){
       domain:$('#nt_domain').value, type:$('#nt_type').value, city:$('#nt_city').value,
       customerName:cname, customerId:$('#nt_cid').value.trim(), customerPhone:phone,
       address:addr, blockNo:$('#nt_block').value.trim(), parcelNo:$('#nt_parcel').value.trim(),
+      gps:_gpsTmp,
       description:$('#nt_desc').value.trim()
     };
     const t=await createTicketCloud({...base, assignedTo:primary});
@@ -1618,7 +1639,7 @@ function showModal(html){
 }
 function closeModal(){ $('#modal-root').innerHTML=''; }
 
-/* ---------- כרטיס פקודת עבודה ---------- */
+/* ---------- כרטיס הפניה ---------- */
 function vTicket(u,id){
   const t=ticketById(id);
   if(!t) return '<div class="empty">הפניה לא נמצאה.</div>';
@@ -1635,6 +1656,7 @@ function vTicket(u,id){
     <div class="detail-head">
       <div>
         <div class="tnum" style="font-size:20px" dir="ltr">${t.number}</div>
+        <div style="font-size:12px;color:var(--muted);font-weight:600">${ticketTerm(t)}</div>
         <div style="font-weight:700;font-size:16px">${esc(t.type)}</div>
       </div>
       <div style="flex:1"></div>
@@ -2650,6 +2672,74 @@ function wgs84ToITM(lat,lon){
   const E=FE+k0*N*(Aa+(1-T+C)*Aa**3/6+(5-18*T+T*T+72*C-58*ep2)*Aa**5/120);
   const Nn=FN+k0*(arc(f2)-arc(f0)+N*Math.tan(f2)*(Aa*Aa/2+(5-T+9*C+4*C*C)*Aa**4/24+(61-58*T+T*T+600*C-330*ep2)*Aa**6/720));
   return {e:Math.round(E*100)/100, n:Math.round(Nn*100)/100};
+}
+
+/* ---------- המרה הפוכה: רשת ישראל (ITM) -> WGS84 ---------- */
+function itmToWgs84(E,Nn){
+  const D=Math.PI/180, A=D/3600;
+  const aG=6378137.0, fG=1/298.257222101, e2=fG*(2-fG), ep2=e2/(1-e2);
+  const k0=1.0000067, FE=219529.584, FN=626907.390;
+  const f0=31.7343936111111*D, l0=35.2045169444444*D;
+  const arc=f=>aG*((1-e2/4-3*e2*e2/64-5*e2**3/256)*f
+    -(3*e2/8+3*e2*e2/32+45*e2**3/1024)*Math.sin(2*f)
+    +(15*e2*e2/256+45*e2**3/1024)*Math.sin(4*f)
+    -(35*e2**3/3072)*Math.sin(6*f));
+  const M=arc(f0)+(Nn-FN)/k0;
+  const mu=M/(aG*(1-e2/4-3*e2*e2/64-5*e2**3/256));
+  const e1=(1-Math.sqrt(1-e2))/(1+Math.sqrt(1-e2));
+  const f1=mu+(3*e1/2-27*e1**3/32)*Math.sin(2*mu)+(21*e1*e1/16-55*e1**4/32)*Math.sin(4*mu)
+    +(151*e1**3/96)*Math.sin(6*mu)+(1097*e1**4/512)*Math.sin(8*mu);
+  const C1=ep2*Math.cos(f1)**2, T1=Math.tan(f1)**2;
+  const N1=aG/Math.sqrt(1-e2*Math.sin(f1)**2);
+  const R1=aG*(1-e2)/Math.pow(1-e2*Math.sin(f1)**2,1.5);
+  const Dd=(E-FE)/(N1*k0);
+  const lat=f1-(N1*Math.tan(f1)/R1)*(Dd*Dd/2-(5+3*T1+10*C1-4*C1*C1-9*ep2)*Dd**4/24
+    +(61+90*T1+298*C1+45*T1*T1-252*ep2-3*C1*C1)*Dd**6/720);
+  const lon=l0+(Dd-(1+2*T1+C1)*Dd**3/6+(5-2*C1+28*T1-3*C1*C1+8*ep2+24*T1*T1)*Dd**5/120)/Math.cos(f1);
+  // גיאודטי GRS80 -> גיאוצנטרי -> הלמרט קדימה -> WGS84
+  const N=aG/Math.sqrt(1-e2*Math.sin(lat)**2);
+  const X=N*Math.cos(lat)*Math.cos(lon), Y=N*Math.cos(lat)*Math.sin(lon), Z=N*(1-e2)*Math.sin(lat);
+  const dX=23.772,dY=17.49,dZ=17.859;
+  const rX=-0.3132*A, rY=-1.85274*A, rZ=1.67299*A, Ms=1+(-5.4262e-6);
+  const X2=dX+Ms*( X - rZ*Y + rY*Z);
+  const Y2=dY+Ms*( rZ*X +   Y - rX*Z);
+  const Z2=dZ+Ms*(-rY*X + rX*Y +   Z);
+  const aW=6378137.0, fW=1/298.257223563, e2W=fW*(2-fW);
+  const p=Math.sqrt(X2*X2+Y2*Y2);
+  let f2=Math.atan2(Z2,p*(1-e2W));
+  for(let i=0;i<8;i++){ const N2=aW/Math.sqrt(1-e2W*Math.sin(f2)**2);
+    f2=Math.atan2(Z2+e2W*N2*Math.sin(f2),p); }
+  return {lat:f2/D, lng:Math.atan2(Y2,X2)/D};
+}
+
+/* ---------- הזנת מיקום ידנית בפתיחת פניה ---------- */
+function ntToggleManualGps(){
+  const el=$('#nt_gps_manual'); if(el) el.hidden=!el.hidden;
+}
+function ntApplyManualGps(){
+  const x=parseFloat(($('#nt_x')?.value||'').replace(/[^\d.\-]/g,''));
+  const y=parseFloat(($('#nt_y')?.value||'').replace(/[^\d.\-]/g,''));
+  if(!isFinite(x)||!isFinite(y)){ toast('יש להזין שני ערכים מספריים'); return; }
+  const inRegion=(la,ln)=>la>=29&&la<=34&&ln>=33&&ln<=37;
+  let lat=null,lng=null;
+  if(Math.abs(x)<=180&&Math.abs(y)<=180){
+    /* קו אורך/רוחב — בודקים את שני הסדרים ובוחרים את זה שנופל באזור */
+    if(inRegion(y,x)){ lat=y; lng=x; }
+    else if(inRegion(x,y)){ lat=x; lng=y; }
+  }else{
+    /* רשת ישראל — גם כאן מנסים את שני הסדרים */
+    let r=itmToWgs84(x,y);
+    if(inRegion(r.lat,r.lng)){ lat=r.lat; lng=r.lng; }
+    else { r=itmToWgs84(y,x); if(inRegion(r.lat,r.lng)){ lat=r.lat; lng=r.lng; } }
+  }
+  if(lat===null){
+    toast('הנקודה שהוזנה נמצאת מחוץ לאזור — יש לבדוק את הערכים'); return;
+  }
+  _gpsTmp={lat,lng,at:Date.now()};
+  const itm=wgs84ToITM(lat,lng);
+  const el=$('#nt_gps');
+  if(el) el.textContent=`נקלט: ${lat.toFixed(5)}, ${lng.toFixed(5)} · ITM ${Math.round(itm.e)}/${Math.round(itm.n)}`;
+  toast('✔ המיקום נקלט');
 }
 
 /* ---------- ייצוא נתוני מיקום ל-GIS ---------- */
