@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-08-12 ב';
+const APP_VER='2026-09-23 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1001,10 +1001,7 @@ function vHome(u){
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-water" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
     <button class="btn btn-danger" style="padding:16px" onclick="openOutage()">🚱 דיווח הפסקת מים</button>
-  </div>`:u.role==='contractor'?`
-  <div style="margin-bottom:20px">
-    <button class="btn btn-water btn-block" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
-  </div>`:`
+  </div>`:u.role==='contractor'?'':`
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-primary" style="padding:16px" onclick="route('newTicket')">➕ פתיחת פניה חדשה</button>
     <button class="btn btn-outline" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה</button>
@@ -1535,7 +1532,22 @@ function offerWhatsAppPair(id1,u1,id2,u2){
 
 /* ---------- "מצאתי תקלה" ---------- */
 let _gpsTmp=null, _ffPhotos=[];
+/* רשימת השיוך ב"מצאתי תקלה": העובד עצמו, או ממונה בתאגיד */
+function ffAssignOpts(){
+  const mgrs=activeUsers().filter(u=>isMgr(u)&&u.id!==ME.id)
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'he'));
+  return `<option value="${ME.id}">אטפל בעצמי — ${esc(ME.name||'')}</option>`+
+    (mgrs.length?`<optgroup label="העברה לממונה">${mgrs.map(m=>`<option value="${m.id}">${esc(m.name)} — ${ROLES[m.role]}</option>`).join('')}</optgroup>`:'');
+}
+function ffToChanged(){
+  const v=$('#ff_to')?.value||ME.id, btn=$('#ff_btn'), h=$('#ff_to_hint');
+  const self=(v===ME.id);
+  if(btn) btn.textContent=self?'פתיחת פניה ושיוך אליי':'פתיחת פניה והעברה אל '+userName(v);
+  if(h) h.textContent=self?'הפניה תיפתח על שמך ותישאר אצלך לטיפול.'
+    :'הפניה תיפתח על שמך עם התמונות והמיקום, ותועבר מיד לטיפולו. תוכל לעקוב אחריה תחת "פניות שהעברתי ולא נסגרו".';
+}
 function openFoundFault(){
+  if(ME.role==='contractor'){ toast('פתיחת פניות נעשית ע"י התאגיד — לדיווח על תקלה יש לפנות למוקד או לממונה'); return; }
   _ffPhotos=[]; _gpsTmp=null;
   showModal(`<h2>🛠️ מצאתי תקלה <button class="x" onclick="closeModal()">×</button></h2>
     <div class="grid grid-2">
@@ -1557,6 +1569,9 @@ function openFoundFault(){
         <span id="ff_pcount" class="hint"></span>
       </div>
       <div class="photos" id="ff_pprev" style="margin-top:10px"></div></div>
+    ${ME.role==='field'?`<div class="field"><label class="req">שיוך הפניה</label>
+      <select id="ff_to" onchange="ffToChanged()">${ffAssignOpts()}</select>
+      <div class="hint" id="ff_to_hint" style="margin-top:6px">הפניה תיפתח על שמך ותישאר אצלך לטיפול.</div></div>`:''}
     <button class="btn btn-water btn-block" id="ff_btn" onclick="doFoundFault()">פתיחת פניה ושיוך אליי</button>`);
 }
 function grabGPS(pref){
@@ -1578,18 +1593,41 @@ function ffAddPhoto(ev){
   });
 }
 async function doFoundFault(){
-  const btn=$('#ff_btn'); btn.disabled=true; btn.textContent='פותח פניה…';
+  const btn=$('#ff_btn'), orig=btn.textContent;
+  const target=($('#ff_to')?.value)||ME.id;
+  const toSelf=(target===ME.id);
+  btn.disabled=true; btn.textContent='פותח פניה…';
   try{
+    /* הפניה נפתחת תמיד על שם המדווח — כך מתועד מי מצא את התקלה,
+       והתמונות ניתנות להעלאה. ההעברה לממונה מתבצעת מיד אחר כך. */
     const t=await createTicketCloud({
       domain:$('#ff_domain').value, type:$('#ff_type').value, city:$('#ff_city').value,
       address:$('#ff_addr').value.trim(), description:$('#ff_desc').value.trim(),
       assignedTo:ME.id, foundByField:true, gps:_gpsTmp
     });
-    await addHistory(t.id,'דיווח מהשטח','נפתחה ע"י איש שטח — "מצאתי תקלה"');
+    await addHistory(t.id,'דיווח מהשטח','נפתחה ע"י '+(ME.name||'איש שטח')+' — "מצאתי תקלה"');
     if(_ffPhotos.length){ await uploadDataUrls(t.id,'before',_ffPhotos); _ffPhotos=[]; }
     _gpsTmp=null;
-    await loadAll(); closeModal(); toast('נפתחה פניה '+t.number+' ושויכה אליך'); route('ticket',t.id);
-  }catch(e){ btn.disabled=false; btn.textContent='פתיחת פניה ושיוך אליי'; errToast(e); }
+    let moved=false, moveErr=null;
+    if(!toSelf){
+      btn.textContent='מעביר לטיפול…';
+      const {error}=await sb.from('tickets').update({assigned_to:target}).eq('id',t.id);
+      if(error) moveErr=error; else moved=true;
+    }
+    await loadAll(); closeModal();
+    if(moved){
+      toast('נפתחה פניה '+t.number+' והועברה אל '+userName(target));
+      route('ticket',t.id);
+      setTimeout(()=>offerWhatsApp(t.id,target),500);
+    }else if(moveErr){
+      /* הפניה נפתחה — רק ההעברה נכשלה. לא פותחים פניה נוספת. */
+      route('ticket',t.id);
+      toast('הפניה '+t.number+' נפתחה ושויכה אליך, אך ההעברה נכשלה — יש להעביר ידנית');
+    }else{
+      toast('נפתחה פניה '+t.number+' ושויכה אליך');
+      route('ticket',t.id);
+    }
+  }catch(e){ btn.disabled=false; btn.textContent=orig; errToast(e); }
 }
 
 /* ---------- דיווח הפסקת מים ---------- */
