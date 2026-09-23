@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-09-23 א';
+const APP_VER='2026-09-23 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -413,6 +413,28 @@ function offerWhatsApp(ticketId,toUserId){
 }
 
 /* ================= טעינת נתונים מהענן ================= */
+/* מטמון קישורים חתומים: נתיב -> {url, exp}. הקישור תקף שעה,
+   ולכן אין טעם לחתום אותו מחדש בכל רענון. */
+const SIGNED={};
+const SIGN_TTL=3600;                 /* שניות — תוקף הקישור */
+const SIGN_MARGIN=10*60*1000;        /* חותמים מחדש 10 דק׳ לפני הפקיעה */
+async function signPaths(paths){
+  const now=Date.now(), need=[];
+  for(const p of paths){
+    const c=SIGNED[p];
+    if(!c || c.exp-now < SIGN_MARGIN) need.push(p);
+  }
+  for(let i=0;i<need.length;i+=500){
+    const batch=need.slice(i,i+500);
+    try{
+      const {data:signed}=await sb.storage.from('ticket-photos').createSignedUrls(batch,SIGN_TTL);
+      (signed||[]).forEach(s=>{ if(s.signedUrl) SIGNED[s.path]={url:s.signedUrl,exp:Date.now()+SIGN_TTL*1000}; });
+    }catch(e){}
+  }
+  const map={};
+  for(const p of paths){ if(SIGNED[p]) map[p]=SIGNED[p].url; }
+  return map;
+}
 async function loadAll(){
   try{
     /* משיכה בעמודים: השרת מחזיר עד 1000 שורות לשאילתה,
@@ -436,18 +458,11 @@ async function loadAll(){
     ]).then(a=>a.map(data=>({data,error:null})));
     if(pr.error||tk.error||hi.error||ph.error) throw (pr.error||tk.error||hi.error||ph.error);
 
-    /* קישורים חתומים לתמונות (התוקף שעה; נטען מחדש בכל רענון) */
-    const paths=ph.data.map(p=>p.path);
-    let urlMap={};
-    /* יצירת הקישורים במנות: בקשה אחת מוגבלת ל-1000 פריטים,
-       ומעבר לכך התמונות האחרונות נשארות בלי קישור */
-    for(let i=0;i<paths.length;i+=500){
-      const batch=paths.slice(i,i+500);
-      try{
-        const {data:signed}=await sb.storage.from('ticket-photos').createSignedUrls(batch,3600);
-        (signed||[]).forEach(s=>{ if(s.signedUrl) urlMap[s.path]=s.signedUrl; });
-      }catch(e){}
-    }
+    /* קישורים חתומים לתמונות — מתוך מטמון בזיכרון.
+       בעבר נחתמו כל התמונות מחדש בכל רענון (כל דקה), וזה היה
+       המקור העיקרי לאיטיות. כעת נחתמות רק תמונות חדשות או
+       כאלה שתוקפן עומד לפוג. */
+    const urlMap=await signPaths(ph.data.map(p=>p.path));
 
     const histBy={}, photosBy={};
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
@@ -481,22 +496,42 @@ async function loadAll(){
       docs:(photosBy[t.id]||{}).doc||[],
       f4photos:Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]]))
     }));
+    _tix=null;   /* הנתונים הוחלפו — האינדקס נבנה מחדש בקריאה הבאה */
     OFFLINE=false; LOAD_ERR='';
     try{ checkNewAssignments(); }catch(e){}
     try{ checkClosedTickets(); }catch(e){}
     try{ checkNewUsers(); }catch(e){}
     try{ checkPlannedWorks(); }catch(e){}
     try{ checkEndOfDay(); }catch(e){}
-    store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:DB.tickets,at:Date.now()}));
+    writeCache();
   }catch(e){
     /* שמירת הנתונים האחרונים שנשמרו במכשיר */
     const c=store.get(CACHE_KEY);
-    if(c){ try{ const j=JSON.parse(c); DB.users=j.users; DB.tickets=j.tickets; }catch(_){} }
+    if(c){ try{ const j=JSON.parse(c); DB.users=j.users; DB.tickets=j.tickets; _tix=null; }catch(_){} }
     OFFLINE=true;
     /* הבחנה: ניתוק רשת אמיתי מול תקלה בשרת — כדי לא להטעות */
     const netDown=(typeof navigator!=='undefined'&&navigator.onLine===false);
     LOAD_ERR=netDown?'':((e&&e.message)?String(e.message).slice(0,160):'שגיאה לא מזוהה');
   }
+}
+/* כתיבת מטמון מקומי (לצפייה במצב לא מקוון).
+   בעבר נכתב כל הבסיס בכל רענון — פעולה שחוסמת את הדפדפן
+   וגם חורגת ממכסת האחסון. כעת: אחת ל-5 דקות, 400 הפניות
+   האחרונות, ובלי קישורי תמונות (שפוקעים ממילא). */
+let _cacheAt=0;
+function writeCache(){
+  if(Date.now()-_cacheAt < 300000) return;
+  _cacheAt=Date.now();
+  try{
+    const slim=DB.tickets.slice(0,400).map(t=>{
+      const c={...t};
+      const strip=a=>(a||[]).map(p=>({id:p.id,path:p.path,name:p.name,url:''}));
+      c.photosBefore=strip(t.photosBefore); c.photosAfter=strip(t.photosAfter); c.docs=strip(t.docs);
+      c.f4photos={};
+      return c;
+    });
+    store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:slim,at:Date.now()}));
+  }catch(e){}
 }
 async function refresh(){ await loadAll(); render(); }
 
@@ -940,7 +975,14 @@ function renderInner(u){
 /* ---------- לוגיקה משותפת ---------- */
 function myTickets(u){ return DB.tickets.filter(t=>t.assignedTo===u.id); }
 function isToday(t){ const d=new Date(t),n=new Date(); return d.toDateString()===n.toDateString(); }
-function ticketById(id){ return DB.tickets.find(t=>t.id===id); }
+/* אינדקס פניות לפי מזהה — נבנה פעם אחת לכל טעינה במקום
+   סריקה לינארית בכל קריאה (נקראת מאות פעמים בכל רינדור) */
+let _tix=null;
+function ticketIndex(){
+  if(!_tix||_tix.size!==DB.tickets.length){ _tix=new Map(DB.tickets.map(t=>[t.id,t])); }
+  return _tix;
+}
+function ticketById(id){ return ticketIndex().get(id); }
 function canEdit(u,t){ return u.role==='super' || t.assignedTo===u.id; }
 const isArchived=t=>t.history&&t.history.some(h=>h.action==='ארכוב קבצים לגיבוי');
 function slaState(t){
@@ -1352,8 +1394,13 @@ function visibleTickets(u){
   /* מנהל-על ומוקדן רואים הכל; כל השאר - רק פניות שפתחו, שמשויכות
      אליהם, שפעלו בהן בעבר, או המקבילות לאלה (השרת אוכף זאת ממילא) */
   if(u.role==='super'||u.role==='dispatcher') return list;
+  /* מעבר יחיד על הרשימה. הנוסחה הקודמת סרקה את כל הפניות עבור
+     כל פניה (O(n²)) — עם אלפי פניות זה הקפיא את המסך בכל רענון. */
   const involved=t=>t.createdBy===u.id||t.assignedTo===u.id||t.history.some(h=>h.by===u.id);
-  return list.filter(t=>involved(t)||list.some(o=>involved(o)&&o.linkedTicketId===t.id));
+  const inv=new Set(), linked=new Set();
+  for(const t of list) if(involved(t)) inv.add(t.id);
+  for(const t of list) if(inv.has(t.id)&&t.linkedTicketId) linked.add(t.linkedTicketId);
+  return list.filter(t=>inv.has(t.id)||linked.has(t.id));
 }
 function applyFilters(){
   TF.q=$('#f_q').value.trim().toLowerCase();
@@ -3360,15 +3407,29 @@ sb.auth.onAuthStateChange((event)=>{
   if(RECOVERY){ route('reset'); return; }
   if(session){ await afterAuth(); } else { route('landing'); }
 })();
-/* רענון נתונים שקט כל דקה במסכי צפייה (לא בטפסים) */
-setInterval(async()=>{
+/* רענון נתונים שקט במסכי צפייה (לא בטפסים).
+   כל 3 דקות, ורק כשהמסך גלוי בפועל — לשונית ברקע או טלפון
+   בכיס לא מושכת נתונים ולא מעמיסה על השרת. */
+let _pollBusy=false;
+async function pollRefresh(){
   try{ checkEndOfDay(); }catch(e){}
+  if(_pollBusy) return;
+  if(typeof document.hidden==='boolean'&&document.hidden) return;
   /* לא מרעננים בזמן הקלדה בשדה, כדי לא לקטוע את המשתמש */
   const typing=document.activeElement&&['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName);
   if(ME&&['home','tickets','board','reports','map'].includes(VIEW.name)&&!document.querySelector('.modal-bg')&&!typing){
-    await loadAll(); render();
+    _pollBusy=true;
+    try{ await loadAll(); render(); } finally{ _pollBusy=false; }
   }
-},60000);
+}
+setInterval(pollRefresh,180000);
+/* חזרה למסך אחרי שהיה ברקע — רענון מיידי, כדי שהנתונים
+   יהיו עדכניים בלי להמתין למחזור הבא */
+let _lastSeen=Date.now();
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ _lastSeen=Date.now(); return; }
+  if(Date.now()-_lastSeen>60000) pollRefresh();
+});
 </script>
 </body>
 </html>
