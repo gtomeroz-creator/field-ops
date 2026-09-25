@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-09-23 ב';
+const APP_VER='2026-09-25 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -435,6 +435,36 @@ async function signPaths(paths){
   for(const p of paths){ if(SIGNED[p]) map[p]=SIGNED[p].url; }
   return map;
 }
+/* ריבוע אפור שמוצג בזמן שהתמונה נחתמת — שומר על המבנה */
+const PH_IMG='data:image/svg+xml;utf8,'+encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#eef2f7"/></svg>');
+/* חתימת התמונות של פניה אחת — נקראת כשהפניה נפתחת.
+   המסך מוצג מיד, והתמונות מופיעות רגע אחריו. */
+const _signing=new Set();
+function ticketPaths(t){
+  const all=[...(t.photosBefore||[]),...(t.photosAfter||[]),...(t.docs||[])];
+  Object.values(t.f4photos||{}).forEach(a=>all.push(...(a||[])));
+  return all;
+}
+async function ensureTicketPhotos(id){
+  if(_signing.has(id)) return;
+  const t=ticketById(id); if(!t) return;
+  const items=ticketPaths(t);
+  const paths=items.map(p=>p.path).filter(Boolean);
+  if(!paths.length) return;
+  const now=Date.now();
+  const missing=paths.some(p=>{ const c=SIGNED[p]; return !c||c.exp-now<SIGN_MARGIN; });
+  const unset=items.some(p=>p.path&&!p.url);
+  if(!missing&&!unset) return;
+  _signing.add(id);
+  try{
+    const map=await signPaths(paths);
+    let changed=false;
+    for(const p of items){ if(map[p.path]&&p.url!==map[p.path]){ p.url=map[p.path]; changed=true; } }
+    if(changed&&VIEW.name==='ticket'&&VIEW.arg===id) render();
+  }catch(e){}
+  finally{ _signing.delete(id); }
+}
 async function loadAll(){
   try{
     /* משיכה בעמודים: השרת מחזיר עד 1000 שורות לשאילתה,
@@ -458,11 +488,13 @@ async function loadAll(){
     ]).then(a=>a.map(data=>({data,error:null})));
     if(pr.error||tk.error||hi.error||ph.error) throw (pr.error||tk.error||hi.error||ph.error);
 
-    /* קישורים חתומים לתמונות — מתוך מטמון בזיכרון.
-       בעבר נחתמו כל התמונות מחדש בכל רענון (כל דקה), וזה היה
-       המקור העיקרי לאיטיות. כעת נחתמות רק תמונות חדשות או
-       כאלה שתוקפן עומד לפוג. */
-    const urlMap=await signPaths(ph.data.map(p=>p.path));
+    /* קישורים חתומים לתמונות: אינם נחתמים כאן כלל.
+       חתימת כל תמונות המערכת לפני הצגת המסך הראשון היא
+       שגרמה לעלייה האיטית — המשתמש המתין לחתימת אלפי תמונות
+       כדי לראות מסך שאינו מציג אף אחת מהן. כעת נחתמות רק
+       תמונותיה של הפניה שנפתחת בפועל (ensureTicketPhotos). */
+    const urlMap={};
+    for(const p of ph.data){ const c=SIGNED[p.path]; if(c) urlMap[p.path]=c.url; }
 
     const histBy={}, photosBy={};
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
@@ -1731,6 +1763,8 @@ function closeModal(){ $('#modal-root').innerHTML=''; }
 function vTicket(u,id){
   const t=ticketById(id);
   if(!t) return '<div class="empty">הפניה לא נמצאה.</div>';
+  /* חתימת תמונות הפניה ברקע — המסך אינו ממתין לה */
+  ensureTicketPhotos(id);
   const d=DOMAINS[t.domain], editable=canEdit(u,t)&&!OFFLINE, mgr=u.role!=='field';
   const late=slaState(t)==='late';
   const handleMs=(t.status==='done'?t.completedAt:Date.now())-t.createdAt;
@@ -1883,12 +1917,12 @@ function vTicket(u,id){
   <div class="grid grid-2" style="margin-bottom:14px">
     <div class="card">
       <div class="section-t">📷 תמונות לפני (${t.photosBefore.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות</div>')}</div>
+      <div class="photos" style="margin-bottom:10px">${t.photosBefore.map((p,i)=>`<img src="${p.url||PH_IMG}" onclick="viewPhoto('${t.id}','photosBefore',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות</div>')}</div>
       ${editable&&t.status!=='done'?photoButtons(t.id,'before'):''}
     </div>
     <div class="card">
       <div class="section-t">📷 תמונות אחרי (${t.photosAfter.length})</div>
-      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות — חובה לסגירה</div>')}</div>
+      <div class="photos" style="margin-bottom:10px">${t.photosAfter.map((p,i)=>`<img src="${p.url||PH_IMG}" onclick="viewPhoto('${t.id}','photosAfter',${i})">`).join('')||(isArchived(t)?'<div class="hint">🗄 התמונות הועברו לארכיון הגיבוי</div>':'<div class="hint">אין תמונות — חובה לסגירה</div>')}</div>
       ${editable&&t.status!=='done'?photoButtons(t.id,'after'):''}
     </div>
   </div>`}
@@ -1898,7 +1932,7 @@ function vTicket(u,id){
     <div class="section-t">📎 מסמכים מצורפים (${(t.docs||[]).length})</div>
     ${(t.docs||[]).length?`<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
       ${t.docs.map(d=>`<div style="display:flex;align-items:center;gap:8px">
-        <a href="${d.url}" target="_blank" class="link" style="font-size:14px">📄 ${esc(d.name||'מסמך מצורף')}</a>
+        ${d.url?`<a href="${d.url}" target="_blank" class="link" style="font-size:14px">📄 ${esc(d.name||'מסמך מצורף')}</a>`:`<span class="hint">📄 ${esc(d.name||'מסמך מצורף')} — טוען…</span>`}
         ${editable&&t.status!=='done'?`<button class="btn btn-outline btn-sm" style="padding:2px 9px" onclick="delDoc('${t.id}',${d.id},'${d.path}')">🗑</button>`:''}
       </div>`).join('')}</div>`:'<div class="hint" style="margin-bottom:10px">אין מסמכים מצורפים</div>'}
     ${editable&&t.status!=='done'?`<label class="btn btn-outline btn-sm" style="margin:0">📎 צירוף מסמך (PDF)
@@ -1968,14 +2002,15 @@ function addPhoto(ev,id,kind){
     catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
   });
 }
-function viewPhoto(id,kind,i){
+async function viewPhoto(id,kind,i){
+  await ensureTicketPhotos(id);
   const t=ticketById(id);
   /* מקטעי טופס 4 מגיעים בפורמט 'f4:<kind>' */
   const f4=kind.startsWith('f4:')?kind.slice(3):null;
   const p=f4?(t.f4photos||{})[f4][i]:t[kind][i];
   const storeKind=f4||(kind==='photosBefore'?'before':'after');
   showModal(`<h2>תצוגת תמונה <button class="x" onclick="closeModal()">×</button></h2>
-    <img src="${p.url}" style="width:100%;border-radius:12px">
+    <img src="${p.url||PH_IMG}" style="width:100%;border-radius:12px">
     ${canEdit(ME,t)&&t.status!=='done'&&!OFFLINE?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${storeKind}',${p.id},'${p.path}')">🗑 מחיקת תמונה</button>`:''}`);
 }
 /* ---------- צירוף ומחיקת מסמכים מהכרטיס ---------- */
@@ -2175,7 +2210,7 @@ function f4YN(v){ return v==='yes'?'כן':(v==='no'?'לא':''); }
 function f4PhotoBlock(t,kind,editable){
   const list=(t.f4photos||{})[kind]||[];
   return `<div style="margin-top:6px">
-    <div class="photos">${list.map((p,i)=>`<img src="${p.url}" onclick="viewPhoto('${t.id}','f4:${kind}',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
+    <div class="photos">${list.map((p,i)=>`<img src="${p.url||PH_IMG}" onclick="viewPhoto('${t.id}','f4:${kind}',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
     ${editable?`<label class="btn btn-outline btn-sm" style="margin-top:5px">📷 צילום / העלאה — ${F4_PHOTOS[kind]}
       <input type="file" accept="image/*" capture="environment" multiple hidden onchange="f4AddPhotos(event,'${t.id}','${kind}')"></label>`:''}
   </div>`;
@@ -2405,7 +2440,9 @@ async function f4Close(id){
 }
 
 /* --- הפקת מסמך להדפסה וחתימה --- */
-function f4Print(id){
+async function f4Print(id){
+  /* ההדפסה חייבת קישורים תקפים — ממתינים לחתימה לפני הבנייה */
+  await ensureTicketPhotos(id);
   const t=ticketById(id), f=f4Get(t);
   const row=(l,v)=>`<tr><th>${l}</th><td>${v||'—'}</td></tr>`;
   const subs=(f.subMeters||[]).map((s,i)=>`<tr><th>מד משני ${i+1}</th><td>מספר: ${esc(s.no||'—')} · קוטר: ${esc(s.dia||'—')} · מיקום: ${esc(s.loc||'—')} · לפי הנחיות: ${f4YN(s.perSpec)||'—'}${s.perSpec==='no'&&s.deviation?' — '+esc(s.deviation):''}</td></tr>`).join('');
