@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-09-25 ב';
+const APP_VER='2026-09-25 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -472,25 +472,74 @@ function ticketPaths(t){
   Object.values(t.f4photos||{}).forEach(a=>all.push(...(a||[])));
   return all;
 }
-async function ensureTicketPhotos(id){
-  if(_signing.has(id)) return;
-  const t=ticketById(id); if(!t) return;
+async function signTicketUrls(t){
   const items=ticketPaths(t);
   const paths=items.map(p=>p.path).filter(Boolean);
-  if(!paths.length) return;
+  if(!paths.length) return false;
   const now=Date.now();
   const missing=paths.some(p=>{ const c=SIGNED[p]; return !c||c.exp-now<SIGN_MARGIN; });
   const unset=items.some(p=>p.path&&!p.url);
-  if(!missing&&!unset) return;
-  _signing.add(id);
-  try{
-    const map=await signPaths(paths);
-    let changed=false;
-    for(const p of items){ if(map[p.path]&&p.url!==map[p.path]){ p.url=map[p.path]; changed=true; } }
-    if(changed&&VIEW.name==='ticket'&&VIEW.arg===id) render();
-  }catch(e){}
-  finally{ _signing.delete(id); }
+  if(!missing&&!unset) return false;
+  const map=await signPaths(paths);
+  let changed=false;
+  for(const p of items){ if(map[p.path]&&p.url!==map[p.path]){ p.url=map[p.path]; changed=true; } }
+  return changed;
 }
+
+/* ---------- פרטי פניה בודדת (היסטוריה + תמונות) ----------
+   אלה אינם נטענים בעלייה אלא רק כשנפתחת פניה. זה מה שהוריד
+   את העלייה מ-2.4 מגה-בייט לכמאית מזה. */
+const DETAIL={};            /* מזהה פניה -> {history, photos, at} */
+const DETAIL_TTL=30000;     /* שניות עד שהפרטים נחשבים ישנים */
+const _busy=new Set();
+async function fetchDetail(id){
+  const [h,p]=await Promise.all([
+    sb.from('ticket_history').select('*').eq('ticket_id',id).order('at'),
+    sb.from('ticket_photos').select('*').eq('ticket_id',id).order('created_at')
+  ]);
+  if(h.error) throw h.error;
+  if(p.error) throw p.error;
+  const photos={before:[],after:[],doc:[]};
+  (p.data||[]).forEach(x=>{ (photos[x.kind]??=[]).push({id:x.id,path:x.path,url:'',name:x.file_name||''}); });
+  DETAIL[id]={
+    history:(h.data||[]).map(x=>({at:+new Date(x.at),by:x.by_user,action:x.action,note:x.note||''})),
+    photos, at:Date.now()
+  };
+  return DETAIL[id];
+}
+function applyDetail(t){
+  const d=DETAIL[t.id]; if(!d) return;
+  t.history=d.history;
+  t.photosBefore=d.photos.before||[];
+  t.photosAfter=d.photos.after||[];
+  t.docs=d.photos.doc||[];
+  t.f4photos=Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,d.photos[k]||[]]));
+  t._detail=d.at;
+}
+/* מבטל את המטמון של פניה שהשתנתה, כדי שתיטען מחדש */
+function invalidateDetail(id){ if(id) delete DETAIL[id]; }
+async function ensureDetail(id){
+  const t=ticketById(id); if(!t) return;
+  if(_busy.has(id)) return;
+  let changed=false;
+  const d=DETAIL[id];
+  if(!d || Date.now()-d.at>DETAIL_TTL){
+    _busy.add(id);
+    try{ await fetchDetail(id); applyDetail(t); changed=true; }
+    catch(e){}
+    finally{ _busy.delete(id); }
+  }else if(t._detail!==d.at){ applyDetail(t); changed=true; }
+  try{ if(await signTicketUrls(t)) changed=true; }catch(e){}
+  if(changed && VIEW.name==='ticket' && VIEW.arg===id) render();
+}
+/* המתנה מפורשת — לפעולות שחייבות נתונים מלאים (סגירה, הדפסה) */
+async function awaitDetail(id){
+  const t=ticketById(id); if(!t) return;
+  if(!DETAIL[id]){ try{ await fetchDetail(id); }catch(e){} }
+  applyDetail(t);
+  try{ await signTicketUrls(t); }catch(e){}
+}
+async function ensureTicketPhotos(id){ return ensureDetail(id); }
 async function loadAll(){
   try{
     /* משיכה בעמודים: השרת מחזיר עד 1000 שורות לשאילתה,
@@ -508,13 +557,31 @@ async function loadAll(){
       PERF.steps.push({name:table, ms:Date.now()-t0, rows:out.length, reqs});
       return out;
     };
+    /* היסטוריה: רק הרישומים שלי. המסך הראשי צריך אותם בלבד
+       (מה העברתי, במה טיפלתי), וההיסטוריה המלאה של פניה
+       נטענת כשהיא נפתחת. */
+    const fetchMine=async()=>{
+      if(!ME||!ME.id) return [];   /* בלי משתמש מחובר אין "הרישומים שלי" */
+      const t0=Date.now(); const out=[]; const page=1000; let reqs=0;
+      for(let from=0;;from+=page){
+        reqs++;
+        const {data,error}=await sb.from('ticket_history').select('*')
+          .eq('by_user',ME.id).order('at').range(from,from+page-1);
+        if(error) throw error;
+        out.push(...data);
+        if(data.length<page) break;
+      }
+      PERF.steps.push({name:'ticket_history', ms:Date.now()-t0, rows:out.length, reqs});
+      return out;
+    };
     const tFetch=Date.now();
-    const [pr,tk,hi,ph]=await Promise.all([
+    /* תמונות אינן נטענות כאן כלל — רק כשנפתחת פניה */
+    const [pr,tk,hi]=await Promise.all([
       fetchAll('profiles','name'),
       fetchAll('tickets','created_at',false),
-      fetchAll('ticket_history','at'),
-      fetchAll('ticket_photos','created_at')
+      fetchMine()
     ]).then(a=>a.map(data=>({data,error:null})));
+    const ph={data:[],error:null};
     PERF.fetchMs=Date.now()-tFetch;
     const tProc=Date.now();
     if(pr.error||tk.error||hi.error||ph.error) throw (pr.error||tk.error||hi.error||ph.error);
@@ -559,6 +626,9 @@ async function loadAll(){
       docs:(photosBy[t.id]||{}).doc||[],
       f4photos:Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]]))
     }));
+    /* פניות שכבר נפתחו בעבר — מחזירים להן את הפרטים המלאים
+       שנשמרו במטמון, כדי שלא ייעלמו אחרי כל רענון */
+    for(const t of DB.tickets) if(DETAIL[t.id]) applyDetail(t);
     _tix=null;   /* הנתונים הוחלפו — האינדקס נבנה מחדש בקריאה הבאה */
     PERF.procMs=Date.now()-tProc;
     OFFLINE=false; LOAD_ERR='';
@@ -1076,6 +1146,7 @@ const fmtDate=d=>{ if(!d) return '—'; const x=new Date(d+'T12:00:00'); return 
 const slaSealedAt=t=>t.status==='done'?t.completedAt:(t.status==='ongoing'?(t.ongoingAt||Date.now()):Date.now());
 async function addHistory(ticketId,action,note){
   await sb.from('ticket_history').insert({ticket_id:ticketId,by_user:ME.id,action,note:note||''});
+  invalidateDetail(ticketId);   /* הפרטים השתנו — ייטענו מחדש */
 }
 
 /* ---------- יצירת פניה בענן (המספור וה-SLA נקבעים ע"י טריגרים בשרת) ---------- */
@@ -1811,8 +1882,8 @@ function closeModal(){ $('#modal-root').innerHTML=''; }
 function vTicket(u,id){
   const t=ticketById(id);
   if(!t) return '<div class="empty">הפניה לא נמצאה.</div>';
-  /* חתימת תמונות הפניה ברקע — המסך אינו ממתין לה */
-  ensureTicketPhotos(id);
+  /* טעינת היסטוריה ותמונות של הפניה ברקע — המסך אינו ממתין */
+  ensureDetail(id);
   const d=DOMAINS[t.domain], editable=canEdit(u,t)&&!OFFLINE, mgr=u.role!=='field';
   const late=slaState(t)==='late';
   const handleMs=(t.status==='done'?t.completedAt:Date.now())-t.createdAt;
@@ -2032,6 +2103,7 @@ async function uploadDataUrls(ticketId,kind,dataUrls){
     const {error:e2}=await sb.from('ticket_photos').insert({ticket_id:ticketId,kind,path,by_user:ME.id});
     if(e2) throw e2;
   }
+  invalidateDetail(ticketId);
   await addHistory(ticketId,'העלאת תמונות '+(kind==='before'?'לפני':'אחרי'),dataUrls.length+' תמונות');
 }
 function photoButtons(id,kind){
@@ -2051,7 +2123,7 @@ function addPhoto(ev,id,kind){
   });
 }
 async function viewPhoto(id,kind,i){
-  await ensureTicketPhotos(id);
+  await awaitDetail(id);
   const t=ticketById(id);
   /* מקטעי טופס 4 מגיעים בפורמט 'f4:<kind>' */
   const f4=kind.startsWith('f4:')?kind.slice(3):null;
@@ -2086,13 +2158,16 @@ async function delPhoto(id,kind,photoId,path){
   try{
     await sb.from('ticket_photos').delete().eq('id',photoId);
     await sb.storage.from('ticket-photos').remove([path]);
+    invalidateDetail(id);
     await loadAll(); closeModal(); render();
   }catch(e){ errToast(e); }
 }
 
 /* ---------- פעולות על פניה ---------- */
 /* ---------- תזכורת תיעוד לפני סגירת פניה ---------- */
-function confirmClose(id){
+async function confirmClose(id){
+  /* חייב נתונים מלאים — אחרת נזהיר על "חוסר תמונה" בטעות */
+  await awaitDetail(id);
   const t=ticketById(id);
   const noPhoto=t.photosAfter.length===0, noGps=!t.gps;
   if(!noPhoto&&!noGps){ setStatus(id,'done'); return; }   /* התיעוד מלא — סוגרים ישירות */
@@ -2489,8 +2564,8 @@ async function f4Close(id){
 
 /* --- הפקת מסמך להדפסה וחתימה --- */
 async function f4Print(id){
-  /* ההדפסה חייבת קישורים תקפים — ממתינים לחתימה לפני הבנייה */
-  await ensureTicketPhotos(id);
+  /* ההדפסה חייבת נתונים מלאים — ממתינים לפני הבנייה */
+  await awaitDetail(id);
   const t=ticketById(id), f=f4Get(t);
   const row=(l,v)=>`<tr><th>${l}</th><td>${v||'—'}</td></tr>`;
   const subs=(f.subMeters||[]).map((s,i)=>`<tr><th>מד משני ${i+1}</th><td>מספר: ${esc(s.no||'—')} · קוטר: ${esc(s.dia||'—')} · מיקום: ${esc(s.loc||'—')} · לפי הנחיות: ${f4YN(s.perSpec)||'—'}${s.perSpec==='no'&&s.deviation?' — '+esc(s.deviation):''}</td></tr>`).join('');
