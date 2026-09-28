@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-09-25 ג';
+const APP_VER='2026-09-28 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -260,6 +260,11 @@ const TYPES={
   G:['אי החזרת המצב לקדמותו','טופס בדיקה לטופס 4']
 };
 const FORM4='טופס בדיקה לטופס 4';
+/* סוגים שבהם מתוקן קו ולכן נדרש קוטר הצינור */
+const PIPE_TYPES=['נזילה','פיצוץ','גלישת ביוב'];
+const needsPipe=t=>t&&PIPE_TYPES.includes(t.type);
+/* קטרים נפוצים — מילוי מהיר בלבד; השדה נשאר טקסט חופשי */
+const PIPE_QUICK={W:['63','75','90','110','160','200','250','315'],S:['160','200','250','315','400','500','600']};
 const isForm4=t=>t&&t.type===FORM4;
 /* פניה שנפתחה ע"י מוקדן = "פניית מוקד"; כל השאר = "פקודת עבודה" */
 const openedByDispatcher=t=>{ const u=t&&userById(t.createdBy); return !!u&&u.role==='dispatcher'; };
@@ -602,6 +607,7 @@ async function loadAll(){
     DB.tickets=tk.data.map(t=>({
       id:t.id, number:t.number, domain:t.domain, type:t.type, city:t.city, address:t.address||'',
       blockNo:t.block_no||'', parcelNo:t.parcel_no||'',
+      pipeDiameter:t.pipe_diameter||'',
       form4:t.form4||{},
       customerName:t.customer_name||'', customerId:t.customer_id||'', customerPhone:t.customer_phone||'',
       description:t.description||'', status:t.status,
@@ -1325,12 +1331,12 @@ function buildTicketsCsv(list,title){
     []
   ];
   const cols=['מספר פניה','סיווג','סוג','ישוב','כתובת','סטטוס','גורם מטפל','פתח את הפניה',
-              'גוש','חלקה','שם לקוח','טלפון לקוח','תיאור','פעולות שבוצעו','נפתחה בתאריך','יעד טיפול',
+              'גוש','חלקה','קוטר הצינור שתוקן','שם לקוח','טלפון לקוח','תיאור','פעולות שבוצעו','נפתחה בתאריך','יעד טיפול',
               'הושלמה בתאריך','זמן טיפול','עמידה ביעד','פניה מקבילה','סיבת החריגה','פירוט החריגה','מועד ביצוע מתוכנן','מה נדרש (טיפול מתמשך)'];
   const rows=list.map(t=>[
     t.number, DOMAINS[t.domain].name, t.type, t.city, t.address||'',
     STATUSES[t.status], userName(t.assignedTo), userName(t.createdBy),
-    t.blockNo||'', t.parcelNo||'',
+    t.blockNo||'', t.parcelNo||'', t.pipeDiameter||'',
     t.customerName||'', t.customerPhone||'', t.description||'', t.workLog||'',
     fmtDT(t.createdAt), fmtDT(t.dueAt),
     t.completedAt?fmtDT(t.completedAt):'',
@@ -1918,6 +1924,7 @@ function vTicket(u,id){
           ${t.firstResponseAt?`<dt>מענה ראשוני</dt><dd>${fmtDT(t.firstResponseAt)}</dd>`:''}
           ${t.responseResetAt?`<dt>איפוס מענה (העברה)</dt><dd>${fmtDT(t.responseResetAt)}</dd>`:''}
           ${t.outage?`<dt>הפסקת מים</dt><dd>${esc(t.outage.area)} · ${t.outage.durationHours} שעות משוער</dd>`:''}
+          ${needsPipe(t)?`<dt>קוטר הצינור שתוקן</dt><dd>${t.pipeDiameter?esc(t.pipeDiameter):'<span class="hint">טרם צוין</span>'}</dd>`:''}
         </dl>
         ${t.description?`<div style="margin-top:12px;padding:12px;background:var(--bg);border-radius:var(--radius-sm);font-size:14px"><b>תיאור:</b> ${esc(t.description)}</div>`:''}
       </div>
@@ -2003,10 +2010,21 @@ function vTicket(u,id){
       ${!isForm4(t)&&t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
     <div class="hint" style="margin-top:8px">${isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.'):'מומלץ לצרף תמונת "אחרי" ולתעד נ.צ לפני הסגירה. לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
+    ${needsPipe(t)?`<div class="field" style="margin-top:14px"><label>קוטר הצינור שתוקן</label>
+      <input id="pipe" value="${esc(t.pipeDiameter)}" placeholder="לדוגמה: 110 מ״מ" onchange="savePipe('${t.id}')">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+        ${(PIPE_QUICK[t.domain]||[]).map(d=>`<button class="btn btn-outline btn-sm" onclick="pipeQuick('${t.id}','${d}')">${d}</button>`).join('')}
+      </div>
+      <div class="hint" style="margin-top:5px">הכפתורים ממלאים מהיר; אפשר גם להקליד כל ערך.</div></div>`:''}
     ${isForm4(t)?'':`<div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
       <textarea id="wlog" rows="3" onchange="saveWorkLog('${t.id}')">${esc(t.workLog)}</textarea></div>`}
   </div>`:''}
-  ${!canEdit(u,t)&&t.status!=='done'?'<div class="alert alert-info">פניה זו בטיפול גורם אחר — הצפייה לקריאה בלבד.</div>':''}
+  ${!canEdit(u,t)&&t.status!=='done'?`<div class="alert alert-info">פניה זו בטיפול ${esc(userName(t.assignedTo))} — הצפייה לקריאה בלבד.</div>
+    ${u.role==='dispatcher'&&!isForm4(t)?`<div class="card" style="padding:14px;margin-top:10px">
+      <div class="section-t" style="margin-top:0">☎ סגירה בשם הגורם המטפל</div>
+      <div class="hint" style="margin-bottom:10px">כאשר איש השטח דיווח טלפונית שהטיפול הושלם ואינו יכול לעדכן בעצמו — קליטה חלשה, עומס או אמצעי לא זמין.</div>
+      <button class="btn btn-success btn-block" onclick="openProxyClose('${t.id}')">✔ סגירה לפי דיווח טלפוני</button>
+    </div>`:''}`:''}
   ${OFFLINE&&t.status!=='done'?'<div class="alert alert-err">📡 מצב לא מקוון — עדכונים יתאפשרו כשתחזור התקשורת.</div>':''}
   ${t.status==='done'&&t.workLog?`<div class="card" style="margin-bottom:14px"><div class="section-t">📝 פעולות שבוצעו</div><div style="font-size:14px">${esc(t.workLog)}</div></div>`:''}
 
@@ -2170,18 +2188,22 @@ async function confirmClose(id){
   await awaitDetail(id);
   const t=ticketById(id);
   const noPhoto=t.photosAfter.length===0, noGps=!t.gps;
-  if(!noPhoto&&!noGps){ setStatus(id,'done'); return; }   /* התיעוד מלא — סוגרים ישירות */
-  const missing=(noPhoto&&noGps)?'ללא תמונה וללא מיקום':(noPhoto?'ללא תמונה':'ללא מיקום');
+  const noPipe=needsPipe(t)&&!(t.pipeDiameter||'').trim();
+  if(!noPhoto&&!noGps&&!noPipe){ setStatus(id,'done'); return; }   /* התיעוד מלא — סוגרים ישירות */
+  const missing=[noPhoto?'ללא תמונה':'',noGps?'ללא מיקום':'',noPipe?'ללא קוטר הצינור':'']
+    .filter(Boolean).join(' · ');
   showModal(`<h2>📷 תיעוד חסר <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-warn" style="font-size:14px;line-height:1.6">
       שים לב — הפניה נסגרת <b>${missing}</b>.<br>
       תיעוד מדויק עוזר לנו להשתפר, למנוע ולמפות תקלות חוזרות.<br>
       <b>מומלץ להוסיף תמונה ולציין מיקום לפני סגירת הפניה.</b>
+      ${noPipe?'<br><b>וכן לציין את קוטר הצינור שתוקן.</b>':''}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       ${noPhoto?`<label class="btn btn-water btn-sm" style="flex:1;margin:0">📷 הוספת תמונת "אחרי"
         <input type="file" accept="image/*" capture="environment" multiple hidden onchange="closeModal();addPhoto(event,'${id}','after')"></label>`:''}
       ${noGps?`<button class="btn btn-outline btn-sm" style="flex:1" onclick="closeModal();grabTicketGPS('${id}')">📍 תיעוד נ.צ ביצוע</button>`:''}
+      ${noPipe?`<button class="btn btn-outline btn-sm" style="flex:1" onclick="closeModal();setTimeout(()=>$('#pipe')?.focus(),150)">📏 מילוי קוטר הצינור</button>`:''}
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn btn-outline" style="flex:1" onclick="closeModal()">↩ חזרה לפניה להשלמת תיעוד</button>
@@ -2194,6 +2216,7 @@ async function setStatus(id,status){
 
   const upd={status};
   if(status==='done'&&$('#wlog')) upd.work_log=$('#wlog').value;
+  if(status==='done'&&$('#pipe')) upd.pipe_diameter=$('#pipe').value.trim();
   const {error}=await sb.from('tickets').update(upd).eq('id',id);
   if(error){ errToast(error); return; }
   if(status==='done'){
@@ -2851,6 +2874,65 @@ async function saveWorkLog(id){
   if(error){ errToast(error); return; }
   t.workLog=$('#wlog').value; toast('התיאור נשמר');
 }
+/* ---------- סגירה ע"י מוקדן בשם הגורם המטפל ----------
+   מיועד למצב שבו איש השטח סיים בפועל אך אינו יכול לעדכן.
+   הדיווח נרשם בהיסטוריה עם שם המוקדן ושם המדווח. */
+function openProxyClose(id){
+  const t=ticketById(id);
+  showModal(`<h2>☎ סגירה בשם ${esc(userName(t.assignedTo))} <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">הפניה <b dir="ltr">${t.number}</b> תיסגר עכשיו, והיא תירשם כפניה שנסגרה על פי דיווח טלפוני — עם שמך ועם שם המדווח. הרישום נשמר בהיסטוריה ואינו ניתן למחיקה.</div>
+    <div class="field"><label class="req">מה דיווח ${esc(userName(t.assignedTo))}?</label>
+      <textarea id="px_report" rows="3" placeholder="לדוגמה: הוחלף קטע צינור באורך 2 מ׳, הקו הוחזר לפעולה, הכביש כוסה זמנית"></textarea>
+      <div class="hint">שדה חובה — זהו התיעוד היחיד של מה שבוצע.</div></div>
+    ${needsPipe(t)?`<div class="field"><label>קוטר הצינור שתוקן</label>
+      <input id="px_pipe" value="${esc(t.pipeDiameter)}" placeholder="לדוגמה: 110 מ״מ">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+        ${(PIPE_QUICK[t.domain]||[]).map(d=>`<button class="btn btn-outline btn-sm" onclick="$('#px_pipe').value='${d} מ״מ'">${d}</button>`).join('')}
+      </div></div>`:''}
+    <div class="alert alert-warn" style="font-size:13.5px">שים לב: הפניה תיסגר ללא תמונה וללא נ.צ, ולכן תסומן כסגורה ללא תיעוד מלא. אם איש השטח יכול לצלם ולעדכן בעצמו — עדיף.</div>
+    <button class="btn btn-success btn-block" id="px_btn" onclick="doProxyClose('${id}')">סגירת הפניה</button>`);
+}
+async function doProxyClose(id){
+  const report=($('#px_report')?.value||'').trim();
+  if(!report){ toast('יש לפרט מה דווח'); return; }
+  const pipe=($('#px_pipe')?.value||'').trim();
+  const btn=$('#px_btn'); if(btn){ btn.disabled=true; btn.textContent='סוגר…'; }
+  try{
+    const {data:num,error}=await sb.rpc('dispatcher_close_ticket',{tid:id,report,pipe:pipe||null});
+    if(error) throw error;
+    invalidateDetail(id);
+    await loadAll(); closeModal(); render();
+    toast('הפניה '+(num||'')+' נסגרה לפי דיווח טלפוני');
+    const t=ticketById(id), lt=t&&t.linkedTicketId?ticketById(t.linkedTicketId):null;
+    if(lt&&lt.status!=='done') setTimeout(()=>offerCloseTwin(id,lt.id),400);
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent='סגירת הפניה'; }
+    if(/dispatcher_close_ticket|function.*does not exist/i.test(e.message||''))
+      toast('יש להריץ קודם את תוספת ה-SQL של סגירת מוקדן');
+    else errToast(e);
+  }
+}
+
+/* קוטר הצינור שתוקן — שדה חופשי, נשמר מיד */
+async function savePipe(id){
+  const t=ticketById(id); if(!canEdit(ME,t)) return;
+  const v=($('#pipe')?.value||'').trim();
+  if(v===(t.pipeDiameter||'')) return;
+  const {error}=await sb.from('tickets').update({pipe_diameter:v}).eq('id',id);
+  if(error){
+    if(/pipe_diameter/.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL של קוטר הצינור');
+    else errToast(error);
+    return;
+  }
+  t.pipeDiameter=v;
+  await addHistory(id,'קוטר הצינור שתוקן',v||'נמחק');
+  toast(v?('נשמר: '+v):'הקוטר נמחק');
+}
+function pipeQuick(id,val){
+  const el=$('#pipe'); if(!el) return;
+  el.value=val+' מ״מ';
+  savePipe(id);
+}
 async function grabTicketGPS(id){
   if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
   navigator.geolocation.getCurrentPosition(async p=>{
@@ -3006,7 +3088,7 @@ function exportGeoJSON(){
         geometry:{type:'Point',coordinates:[t.gps.lng,t.gps.lat]},
         properties:{
           number:t.number, domain:DOMAINS[t.domain].name, type:t.type,
-          city:t.city, address:t.address||'', block:t.blockNo||'', parcel:t.parcelNo||'',
+          city:t.city, address:t.address||'', block:t.blockNo||'', parcel:t.parcelNo||'', pipe:t.pipeDiameter||'',
           status:STATUSES[t.status], assigned:userName(t.assignedTo),
           created:fmtDT(t.createdAt), due:fmtDT(t.dueAt),
           completed:t.completedAt?fmtDT(t.completedAt):'',
@@ -3020,11 +3102,12 @@ function exportGeoJSON(){
 function exportGisCsv(){
   const list=gisRows(ME);
   if(!list.length){ toast('אין פניות עם נקודת ציון בסינון הנוכחי'); return; }
-  const cols=['מספר פניה','סיווג','סוג','ישוב','כתובת','גוש','חלקה','סטטוס','גורם מטפל',
+  const cols=['מספר פניה','סיווג','סוג','ישוב','כתובת','גוש','חלקה','קוטר הצינור','סטטוס','גורם מטפל',
               'נפתחה','יעד','הושלמה','עמידה ביעד','ITM מזרח','ITM צפון','קו רוחב','קו אורך'];
   const rows=list.map(t=>{
     const itm=wgs84ToITM(t.gps.lat,t.gps.lng);
     return [t.number,DOMAINS[t.domain].name,t.type,t.city,t.address||'',t.blockNo||'',t.parcelNo||'',
+      t.pipeDiameter||'',
       STATUSES[t.status],userName(t.assignedTo),fmtDT(t.createdAt),fmtDT(t.dueAt),
       t.completedAt?fmtDT(t.completedAt):'', slaState(t)==='late'?'חריגה':'בתוך היעד',
       itm.e,itm.n,t.gps.lat.toFixed(7),t.gps.lng.toFixed(7)];
