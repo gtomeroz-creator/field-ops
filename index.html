@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-10-08 ב';
+const APP_VER='2026-10-08 ג';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -1300,11 +1300,17 @@ const BULK_REASONS=[
   'סגירה מרוכזת — כפילות',
   'סגירה מרוכזת — ניקוי מצבת היסטורית'
 ];
-function bulkCandidates(minDays,workerId){
+/* מועמדות לסגירה: נפתחו לפני התאריך שנבחר, וחרגו מהיעד
+   מעל שבוע. התנאי השני נשאר תמיד — כדי שלא ייסגרו פניות
+   שעדיין בתוך היעד רק מפני שנפתחו מזמן. */
+function bulkCandidates(beforeDate,workerId){
+  if(!beforeDate) return [];
+  const cut=new Date(beforeDate+'T00:00:00').getTime();
+  if(isNaN(cut)) return [];
   return DB.tickets.filter(t=>isBacklog(t)
-    && overdueDays(t)>=minDays
+    && t.createdAt<cut
     && (!workerId||t.assignedTo===workerId))
-    .sort((a,b)=>overdueDays(b)-overdueDays(a));
+    .sort((a,b)=>a.createdAt-b.createdAt);
 }
 function openBulkClose(){
   if(ME.role!=='super'){ toast('הפעולה פתוחה למנהל על בלבד'); return; }
@@ -1314,14 +1320,9 @@ function openBulkClose(){
   showModal(`<h2>🧹 סגירה מרוכזת <button class="x" onclick="closeModal()">×</button></h2>
     <div class="alert alert-err">פעולה זו סוגרת פניות בכמות ואינה ניתנת לביטול. פניה שנסגרת כאן ולא טופלה בפועל — התקלה בשטח נשארת, והתושב לא יקבל מענה. יש להשתמש רק אחרי בירור מול הגורם המטפל.</div>
     <div class="grid grid-2">
-      <div class="field"><label class="req">סגירת פניות באיחור של לפחות</label>
-        <select id="bc_days" onchange="bulkPreview()">
-          <option value="30" selected>30 ימים</option>
-          <option value="60">60 ימים</option>
-          <option value="90">90 ימים</option>
-          <option value="180">חצי שנה</option>
-          <option value="8">8 ימים (כל המצבת הישנה)</option>
-        </select></div>
+      <div class="field"><label class="req">סגירת פניות שנפתחו לפני</label>
+        <input type="date" id="bc_date" value="${bulkDefaultDate()}" onchange="bulkPreview()">
+        <div class="hint" style="margin-top:5px">ייסגרו רק פניות שגם חרגו מהיעד מעל שבוע.</div></div>
       <div class="field"><label>גורם מטפל</label>
         <select id="bc_worker" onchange="bulkPreview()">
           <option value="">כל הגורמים</option>
@@ -1338,28 +1339,36 @@ function openBulkClose(){
     <button class="btn btn-danger btn-block" id="bc_btn" onclick="doBulkClose()">סגירה סופית</button>`);
   bulkPreview();
 }
+/* ברירת מחדל: לפני שלושה חודשים */
+function bulkDefaultDate(){
+  const d=new Date(); d.setMonth(d.getMonth()-3);
+  return d.toISOString().slice(0,10);
+}
 function bulkPreview(){
-  const d=+($('#bc_days')?.value||30), w=$('#bc_worker')?.value||'';
+  const d=$('#bc_date')?.value||'', w=$('#bc_worker')?.value||'';
   const list=bulkCandidates(d,w);
   const box=$('#bc_prev'); if(!box) return;
+  if(!d){ box.innerHTML='<div class="alert alert-info">יש לבחור תאריך.</div>'; return; }
   if(!list.length){
-    box.innerHTML='<div class="alert alert-info">אין פניות שעונות על התנאים.</div>';
+    box.innerHTML='<div class="alert alert-info">אין פניות שנפתחו לפני '+fmtDate(d)+' וחרגו מהיעד מעל שבוע.</div>';
     return;
   }
   const byW={}; list.forEach(t=>{ byW[t.assignedTo]=(byW[t.assignedTo]||0)+1; });
+  const one=list.length===1;
   box.innerHTML=`<div class="alert alert-warn">
-    ייסגרו <b>${list.length}</b> ${list.length===1?'פניה':'פניות'} ·
-    הוותיקה באיחור ${overdueDays(list[0])} ימים.
+    ${one?'תיסגר':'ייסגרו'} <b>${list.length}</b> ${one?'פניה שנפתחה':'פניות שנפתחו'} לפני ${fmtDate(d)} ·
+    הוותיקה נפתחה ב-${fmtDT(list[0].createdAt).split(',')[0]}.
     <div style="margin-top:6px;font-size:13px">${Object.entries(byW)
       .sort((a,b)=>b[1]-a[1])
       .map(([id,n])=>esc(userName(id))+': '+n).join(' · ')}</div>
     <div style="margin-top:8px;max-height:150px;overflow:auto;font-size:12.5px;line-height:1.8">
-      ${list.slice(0,25).map(t=>`<div dir="rtl">${t.number} · ${esc(t.type)} · ${esc(t.city)} · באיחור ${overdueDays(t)} ימים</div>`).join('')}
+      ${list.slice(0,25).map(t=>`<div dir="rtl">${t.number} · ${esc(t.type)} · ${esc(t.city)} · נפתחה ${fmtDT(t.createdAt).split(',')[0]} · באיחור ${overdueDays(t)} ימים</div>`).join('')}
       ${list.length>25?`<div style="color:var(--muted)">ועוד ${list.length-25}…</div>`:''}
     </div></div>`;
 }
 async function doBulkClose(){
-  const d=+($('#bc_days')?.value||30), w=$('#bc_worker')?.value||'';
+  const d=$('#bc_date')?.value||'', w=$('#bc_worker')?.value||'';
+  if(!d){ toast('יש לבחור תאריך'); return; }
   const list=bulkCandidates(d,w);
   const typed=($('#bc_confirm')?.value||'').trim();
   if(!list.length){ toast('אין פניות לסגירה'); return; }
@@ -1367,7 +1376,9 @@ async function doBulkClose(){
     toast('המספר שהוקלד אינו תואם — נדרש '+list.length);
     return;
   }
-  const reason=$('#bc_reason')?.value||'', detail=($('#bc_detail')?.value||'').trim();
+  const reason=$('#bc_reason')?.value||'';
+  const typedDetail=($('#bc_detail')?.value||'').trim();
+  const detail=(typedDetail?typedDetail+' · ':'')+'נפתחו לפני '+fmtDate(d);
   const btn=$('#bc_btn'); if(btn){ btn.disabled=true; btn.textContent='סוגר…'; }
   try{
     let done=0;
