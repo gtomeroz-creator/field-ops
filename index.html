@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-09-28 א';
+const APP_VER='2026-10-08 ב';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -287,6 +287,27 @@ const STATUSES={open:'פתוחה',progress:'בטיפול',ongoing:'בטיפול 
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',ongoing:'chip-transfer',done:'chip-done'};
 /* פניה במצב טיפול מתמשך: שעון היעד הדחוף נחתם בעת הסימון */
 const isOngoing=t=>t.status==='ongoing';
+/* ---------- פניות תקועות: ימים מעבר ליעד ----------
+   נמדד מול היעד ולא מוותק הפתיחה, כי היעדים נעים בין 4 שעות
+   ל-14 יום. "בטיפול מתמשך" אינה תקועה — יש לה מועד ביצוע
+   ומנגנון תזכורת משלה. */
+const STUCK_WEEK=7;   /* עד כמה ימי איחור נחשבים "השבוע האחרון" */
+function overdueDays(t){
+  if(!t||t.status==='done'||t.status==='ongoing') return 0;
+  const ms=Date.now()-t.dueAt;
+  return ms<=0?0:Math.floor(ms/864e5);
+}
+const isStuck=t=>{ const d=overdueDays(t); return d>=1&&d<=STUCK_WEEK; };
+const isBacklog=t=>overdueDays(t)>STUCK_WEEK;
+/* כל הפניות החורגות בארגון — למנהלים בלבד */
+function stuckList(u){
+  if(!isMgr(u)) return [];
+  return DB.tickets.filter(isStuck).sort((a,b)=>overdueDays(b)-overdueDays(a));
+}
+function backlogList(u){
+  if(!isMgr(u)) return [];
+  return DB.tickets.filter(isBacklog).sort((a,b)=>overdueDays(b)-overdueDays(a));
+}
 const awaitingPlan=t=>t.status==='ongoing'&&!t.plannedDate;
 
 /* ---------- עזרים ---------- */
@@ -642,6 +663,7 @@ async function loadAll(){
     try{ checkClosedTickets(); }catch(e){}
     try{ checkNewUsers(); }catch(e){}
     try{ checkPlannedWorks(); }catch(e){}
+    try{ checkWeeklyStuck(); }catch(e){}
     try{ checkEndOfDay(); }catch(e){}
     writeCache();
   }catch(e){
@@ -728,6 +750,30 @@ function notifyUser(title,body,ticketId,goto){
       n.onclick=()=>{ window.focus(); if(ticketId) route('ticket',ticketId); else if(goto) route(goto); else route('tickets','open'); n.close(); };
     }catch(e){}
   }
+}
+
+/* ---------- תזכורת שבועית למנהלים: פניות שחרגו מהיעד ----------
+   נורית פעם בשבוע, בפתיחה הראשונה מיום ראשון ואילך. אינה
+   מחליפה את הלוח במסך הראשי — הלוח מוצג תמיד, וההתראה רק
+   מושכת אליו תשומת לב בתחילת השבוע. */
+function weekKey(){
+  const d=new Date(); d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-d.getDay());   /* יום ראשון של השבוע הנוכחי */
+  return d.toDateString();
+}
+function checkWeeklyStuck(){
+  if(!ME||!isMgr(ME)) return;
+  const key='hari_wstuck_'+ME.id+'_'+weekKey();
+  if(store.get(key)) return;
+  const stuck=stuckList(ME);
+  if(!stuck.length){ store.set(key,'1'); return; }
+  store.set(key,'1');
+  const workers=new Set(stuck.map(t=>t.assignedTo)).size;
+  notifyUser(
+    '⏰ '+stuck.length+' פניות חרגו מהיעד השבוע',
+    'מחולקות בין '+workers+' '+(workers===1?'גורם מטפל':'גורמים מטפלים')+'. לחץ לרשימה המלאה לקראת השיחה השבועית.',
+    null, 'home'
+  );
 }
 
 /* ---------- תזכורת סוף יום: פניות פתוחות שטרם נסגרו ---------- */
@@ -1196,6 +1242,7 @@ function vHome(u){
   ${ongoing.length?`<div style="margin-bottom:18px">
     ${statCard(ongoing.length,'🔧 עבודות בטיפול מתמשך'+(noPlan?' · '+noPlan+' ממתינות לקביעת מועד':''),'var(--transfer)','tickets','ongoing')}
   </div>`:''}
+  ${isMgr(u)?stuckPanel(u):''}
   ${u.role==='field'?`
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-water" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
@@ -1207,6 +1254,163 @@ function vHome(u){
   </div>`}
   <div class="section-t">המשימות שלי — לפי דחיפות</div>
   ${active.length?renderList(groupLinked(active)):'<div class="empty"><div class="i">🎉</div>אין פניות פתוחות לטיפולך כרגע.</div>'}`;
+}
+/* ---------- לוח הפניות התקועות (מנהלים בלבד) ----------
+   מוצג תמיד כשיש תקועות, ולא כהתראה שתלויה בכך שהאפליקציה
+   פתוחה בשעה מסוימת. */
+function stuckPanel(u){
+  const stuck=stuckList(u), back=backlogList(u);
+  if(!stuck.length&&!back.length) return '';
+  const byWorker={};
+  for(const t of stuck){ (byWorker[t.assignedTo]??=[]).push(t); }
+  const rows=Object.entries(byWorker)
+    .sort((a,b)=>b[1].length-a[1].length)
+    .map(([uid,list])=>{
+      const worst=Math.max(...list.map(overdueDays));
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
+        <span style="font-size:14px">👤 ${esc(userName(uid))}</span>
+        <span style="font-size:13px;color:var(--muted)">${list.length} ${list.length===1?'פניה':'פניות'} · הוותיקה ${worst} ${worst===1?'יום':'ימים'}</span>
+      </div>`;
+    }).join('');
+  return `<div class="card" style="margin-bottom:18px;border-right:4px solid var(--danger)">
+    <div class="section-t" style="margin-top:0">⏰ פניות תקועות</div>
+    ${stuck.length?`<div class="hint" style="margin-bottom:8px">חרגו מהיעד במהלך השבוע האחרון — אלה שכדאי לעבור עליהן בשיחה השבועית.</div>
+    ${rows}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-danger btn-sm" onclick="route('tickets','stuck')">צפייה ב-${stuck.length} הפניות</button>
+      <button class="btn btn-success btn-sm" onclick="shareStuck()">📲 שליחת הרשימה בוואטסאפ</button>
+    </div>`:'<div class="hint">אין פניות שחרגו מהיעד בשבוע האחרון.</div>'}
+    ${back.length?`<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+      <div style="font-size:13.5px;color:var(--muted)">מצבת ישנה: <b>${back.length}</b> פניות שחרגו מהיעד לפני יותר משבוע.
+      אינן נכללות בתזכורת ואינן בשיחה השבועית.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn btn-outline btn-sm" onclick="route('tickets','backlog')">פתיחת המצבת הישנה</button>
+        ${u.role==='super'?`<button class="btn btn-outline btn-sm" onclick="openBulkClose()">🧹 סגירה מרוכזת</button>`:''}
+      </div>
+    </div>`:''}
+  </div>`;
+}
+/* ---------- סגירה מרוכזת של מצבת ישנה (מנהל על בלבד) ----------
+   זמין רק על פניות שחרגו מהיעד מעל שבוע, עם רף ברירת מחדל
+   של 30 יום. הסיבות מתחילות כולן ב"סגירה מרוכזת" כדי שיהיה
+   אפשר לזהות אותן בפילוח החריגות ולא לעוות את הניתוח. */
+const BULK_REASONS=[
+  'סגירה מרוכזת — הטיפול בוצע בשטח ולא דווח במערכת',
+  'סגירה מרוכזת — הפניה אינה רלוונטית עוד',
+  'סגירה מרוכזת — כפילות',
+  'סגירה מרוכזת — ניקוי מצבת היסטורית'
+];
+function bulkCandidates(minDays,workerId){
+  return DB.tickets.filter(t=>isBacklog(t)
+    && overdueDays(t)>=minDays
+    && (!workerId||t.assignedTo===workerId))
+    .sort((a,b)=>overdueDays(b)-overdueDays(a));
+}
+function openBulkClose(){
+  if(ME.role!=='super'){ toast('הפעולה פתוחה למנהל על בלבד'); return; }
+  const workers=[...new Set(DB.tickets.filter(isBacklog).map(t=>t.assignedTo))]
+    .map(id=>({id,name:userName(id)}))
+    .sort((a,b)=>a.name.localeCompare(b.name,'he'));
+  showModal(`<h2>🧹 סגירה מרוכזת <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-err">פעולה זו סוגרת פניות בכמות ואינה ניתנת לביטול. פניה שנסגרת כאן ולא טופלה בפועל — התקלה בשטח נשארת, והתושב לא יקבל מענה. יש להשתמש רק אחרי בירור מול הגורם המטפל.</div>
+    <div class="grid grid-2">
+      <div class="field"><label class="req">סגירת פניות באיחור של לפחות</label>
+        <select id="bc_days" onchange="bulkPreview()">
+          <option value="30" selected>30 ימים</option>
+          <option value="60">60 ימים</option>
+          <option value="90">90 ימים</option>
+          <option value="180">חצי שנה</option>
+          <option value="8">8 ימים (כל המצבת הישנה)</option>
+        </select></div>
+      <div class="field"><label>גורם מטפל</label>
+        <select id="bc_worker" onchange="bulkPreview()">
+          <option value="">כל הגורמים</option>
+          ${workers.map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="field"><label class="req">סיבת הסגירה (תירשם בכל פניה)</label>
+      <select id="bc_reason">${BULK_REASONS.map(r=>`<option>${r}</option>`).join('')}</select></div>
+    <div class="field"><label>פירוט (לא חובה)</label>
+      <input id="bc_detail" placeholder="לדוגמה: נבדק מול עלי בתאריך 8.10"></div>
+    <div id="bc_prev"></div>
+    <div class="field"><label class="req">לאישור, הקלד את מספר הפניות שייסגרו</label>
+      <input id="bc_confirm" dir="ltr" style="text-align:left" autocomplete="off" inputmode="numeric"></div>
+    <button class="btn btn-danger btn-block" id="bc_btn" onclick="doBulkClose()">סגירה סופית</button>`);
+  bulkPreview();
+}
+function bulkPreview(){
+  const d=+($('#bc_days')?.value||30), w=$('#bc_worker')?.value||'';
+  const list=bulkCandidates(d,w);
+  const box=$('#bc_prev'); if(!box) return;
+  if(!list.length){
+    box.innerHTML='<div class="alert alert-info">אין פניות שעונות על התנאים.</div>';
+    return;
+  }
+  const byW={}; list.forEach(t=>{ byW[t.assignedTo]=(byW[t.assignedTo]||0)+1; });
+  box.innerHTML=`<div class="alert alert-warn">
+    ייסגרו <b>${list.length}</b> ${list.length===1?'פניה':'פניות'} ·
+    הוותיקה באיחור ${overdueDays(list[0])} ימים.
+    <div style="margin-top:6px;font-size:13px">${Object.entries(byW)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([id,n])=>esc(userName(id))+': '+n).join(' · ')}</div>
+    <div style="margin-top:8px;max-height:150px;overflow:auto;font-size:12.5px;line-height:1.8">
+      ${list.slice(0,25).map(t=>`<div dir="rtl">${t.number} · ${esc(t.type)} · ${esc(t.city)} · באיחור ${overdueDays(t)} ימים</div>`).join('')}
+      ${list.length>25?`<div style="color:var(--muted)">ועוד ${list.length-25}…</div>`:''}
+    </div></div>`;
+}
+async function doBulkClose(){
+  const d=+($('#bc_days')?.value||30), w=$('#bc_worker')?.value||'';
+  const list=bulkCandidates(d,w);
+  const typed=($('#bc_confirm')?.value||'').trim();
+  if(!list.length){ toast('אין פניות לסגירה'); return; }
+  if(typed!==String(list.length)){
+    toast('המספר שהוקלד אינו תואם — נדרש '+list.length);
+    return;
+  }
+  const reason=$('#bc_reason')?.value||'', detail=($('#bc_detail')?.value||'').trim();
+  const btn=$('#bc_btn'); if(btn){ btn.disabled=true; btn.textContent='סוגר…'; }
+  try{
+    let done=0;
+    /* במנות של 200 — גם מגבלת השרת וגם כדי שכשל חלקי לא יבטל הכל */
+    for(let i=0;i<list.length;i+=200){
+      const ids=list.slice(i,i+200).map(t=>t.id);
+      const {data:n,error}=await sb.rpc('admin_bulk_close',{ids,reason,detail:detail||null});
+      if(error) throw error;
+      done+=(n||0);
+      if(btn) btn.textContent='סוגר… '+done+'/'+list.length;
+    }
+    list.forEach(t=>invalidateDetail(t.id));
+    await loadAll(); closeModal(); render();
+    toast('נסגרו '+done+' פניות');
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent='סגירה סופית'; }
+    if(/admin_bulk_close|does not exist/i.test(e.message||''))
+      toast('יש להריץ קודם את תוספת ה-SQL של הסגירה המרוכזת');
+    else errToast(e);
+  }
+}
+
+/* טקסט לשיחה השבועית — מרוכז לפי גורם מטפל */
+function stuckWaText(u){
+  const stuck=stuckList(u);
+  const byWorker={};
+  for(const t of stuck){ (byWorker[t.assignedTo]??=[]).push(t); }
+  const L=['*פניות שחרגו מהיעד בשבוע האחרון*','']; 
+  for(const [uid,list] of Object.entries(byWorker).sort((a,b)=>b[1].length-a[1].length)){
+    L.push('*'+userName(uid)+'* — '+list.length+' '+(list.length===1?'פניה':'פניות'));
+    for(const t of list.slice(0,10)){
+      L.push('• '+t.number+' · '+t.type+' · '+t.city+' · באיחור '+overdueDays(t)+' '+(overdueDays(t)===1?'יום':'ימים'));
+    }
+    if(list.length>10) L.push('• ועוד '+(list.length-10)+'…');
+    L.push('');
+  }
+  L.push('נא להיכנס למערכת ולעדכן את הנדרש.');
+  L.push(ORG_NAME);
+  return L.join('\n');
+}
+function shareStuck(){
+  const txt=stuckWaText(ME);
+  window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');
 }
 function statCard(n,l,color,view,filter){
   return `<div class="stat" onclick="route('${view}','${filter}')">
@@ -1222,7 +1426,9 @@ function trow(t,inWrap){
       <span class="chip ${openedByDispatcher(t)?'chip-progress':'chip-general'}" style="font-size:10.5px">${ticketTerm(t)}</span>
       <span class="chip ${d.chip}">${d.name}</span>
       <span class="chip ${STATUS_CHIP[t.status]}">${STATUSES[t.status]}</span>
-      ${late&&t.status!=='done'?'<span class="chip chip-late">⏰ חריגה מיעד</span>':''}
+      ${late&&t.status!=='done'?(overdueDays(t)>=1
+        ?`<span class="chip chip-late">⏰ באיחור ${overdueDays(t)} ${overdueDays(t)===1?'יום':'ימים'}</span>`
+        :'<span class="chip chip-late">⏰ חריגה מיעד</span>'):''}
       ${t.outage?'<span class="chip chip-late">🚱 הפסקת מים</span>':''}
       ${t.status==='ongoing'?(t.plannedDate?`<span class="chip ${new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()?'chip-late':'chip-transfer'}">🔧 ביצוע: ${fmtDate(t.plannedDate)}</span>`:'<span class="chip chip-late">🔧 ממתין לקביעת מועד</span>'):''}
       ${lt&&!inWrap?'<span class="chip chip-transfer">🔗 מקבילה</span>':''}
@@ -1273,7 +1479,7 @@ function renderList(list){
 
 /* מצב הסינון של דף הפניות — נשמר בין רינדורים (רענון אוטומטי, חזרה מכרטיס) */
 let TF={q:'',domain:'',status:'',city:'',assignee:'',from:'',to:'',arg:null};
-const ARG_LABELS={open:'פניות לטיפולי',progress:'בביצוע',moved:'פניות שהעברתי ולא נסגרו',doneToday:'הושלמו היום',ongoing:'עבודות בטיפול מתמשך'};
+const ARG_LABELS={open:'פניות לטיפולי',progress:'בביצוע',moved:'פניות שהעברתי ולא נסגרו',doneToday:'הושלמו היום',ongoing:'עבודות בטיפול מתמשך',stuck:'תקועות — עד שבוע מעבר ליעד',backlog:'מצבת ישנה — מעל שבוע מעבר ליעד'};
 
 /* רשימת הפניות אחרי סינון המונה (arg) וסינון התיבות — מקור אחד לשתי הדרכים */
 function filteredTickets(u){
@@ -1285,6 +1491,8 @@ function filteredTickets(u){
   if(f==='doneToday') list=list.filter(t=>t.status==='done'&&isToday(t.completedAt||0));
   if(f==='ongoing'){ list=list.filter(t=>t.status==='ongoing'&&(isMgr(u)||t.assignedTo===u.id));
     list.sort((a,b)=>(a.plannedDate||'9999').localeCompare(b.plannedDate||'9999')); }
+  if(f==='stuck'){ list=list.filter(isStuck); list.sort((a,b)=>overdueDays(b)-overdueDays(a)); }
+  if(f==='backlog'){ list=list.filter(isBacklog); list.sort((a,b)=>overdueDays(b)-overdueDays(a)); }
   if(TF.domain) list=list.filter(t=>t.domain===TF.domain);
   /* 'late' אינו סטטוס אלא מצב: חרגה מיעד הטיפול (סגורה באיחור או פתוחה שעבר יעדה) */
   if(TF.status==='late') list=list.filter(t=>slaState(t)==='late');
@@ -1909,7 +2117,9 @@ function vTicket(u,id){
       <div style="flex:1"></div>
       <span class="chip ${d.chip}">${d.name}</span>
       <span class="chip ${STATUS_CHIP[t.status]}">${STATUSES[t.status]}</span>
-      ${late&&t.status!=='done'?'<span class="chip chip-late">⏰ חריגה מיעד</span>':''}
+      ${late&&t.status!=='done'?(overdueDays(t)>=1
+        ?`<span class="chip chip-late">⏰ באיחור ${overdueDays(t)} ${overdueDays(t)===1?'יום':'ימים'}</span>`
+        :'<span class="chip chip-late">⏰ חריגה מיעד</span>'):''}
     </div>
     <div class="grid grid-2">
       <div>
