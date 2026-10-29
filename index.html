@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-10-08 ג';
+const APP_VER='2026-10-29 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -257,7 +257,12 @@ const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chi
 const TYPES={
   W:['נזילה','פיצוץ','תלונת צרכן - אין מים','החלפת מונה שבור','בדיקת שטח למד מים','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
-  G:['אי החזרת המצב לקדמותו','טופס בדיקה לטופס 4']
+  G:['אי החזרת המצב לקדמותו','בקשה להיתר בניה','טופס בדיקה לטופס 4']
+};
+/* הודעות קבועות לפי סוג פניה — מוצגות לגורם המטפל בכרטיס.
+   להוספת הודעה לסוג נוסף: שורה אחת כאן, ותו לא. */
+const TYPE_NOTICE={
+  'בקשה להיתר בניה':'נא להגיע לשיחה בנושא עם הישאם במשרדי התאגיד'
 };
 const FORM4='טופס בדיקה לטופס 4';
 /* סוגים שבהם מתוקן קו ולכן נדרש קוטר הצינור */
@@ -281,7 +286,7 @@ const TYPE_AREA={
  'הפסקת מים':'dispatch',  /* מטופל ע"י מוקדנים - סינון מיוחד */
  'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters','בדיקת שטח למד מים':'meters',
  'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections',
- 'טופס בדיקה לטופס 4':'connections'
+ 'טופס בדיקה לטופס 4':'connections','בקשה להיתר בניה':'connections'
 };
 const STATUSES={open:'פתוחה',progress:'בטיפול',ongoing:'בטיפול מתמשך',done:'הושלמה'};
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',ongoing:'chip-transfer',done:'chip-done'};
@@ -1837,7 +1842,7 @@ function vNewTicket(u){
       <div id="nt_gps_manual" hidden>
         <div class="grid grid-2" style="gap:8px">
           <div class="field" style="margin:0"><label>X (מזרח / קו אורך)</label>
-            <input id="nt_x" inputmode="decimal" dir="ltr" style="text-align:left" placeholder="228416 או 35.3021"></div>
+            <input id="nt_x" dir="ltr" style="text-align:left" placeholder="228416 · 35.3021 · או קישור למפה"></div>
           <div class="field" style="margin:0"><label>Y (צפון / קו רוחב)</label>
             <input id="nt_y" inputmode="decimal" dir="ltr" style="text-align:left" placeholder="733948 או 32.7015"></div>
         </div>
@@ -2118,6 +2123,9 @@ function vTicket(u,id){
     <button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="waShare('${t.id}')" title="נפתח עם ההודעה מוכנה — בוחרים איש קשר או קבוצה ושולחים">📲 וואטסאפ — לאיש קשר או לקבוצה</button>
     ${u.role==='super'?`<button class="btn btn-danger btn-sm" onclick="confirmDeleteTicket('${t.id}')">🗑 מחיקת פניה</button>`:''}
   </div>
+  ${TYPE_NOTICE[t.type]?`<div class="alert alert-warn" style="margin-bottom:14px;font-size:15px;line-height:1.6">
+    <b>📌 לתשומת לב הגורם המטפל</b><br>${esc(TYPE_NOTICE[t.type])}
+  </div>`:''}
   <div class="card" style="margin-bottom:14px">
     <div class="detail-head">
       <div>
@@ -2227,6 +2235,7 @@ function vTicket(u,id){
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       ${isForm4(t)&&isMgr(u)&&t.status!=='done'?`<button class="btn btn-success" onclick="f4Close('${t.id}')">✔ סיום התהליך וסגירת הטופס</button>`:''}
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>`}
+      ${isForm4(t)?'':`<button class="btn btn-outline" onclick="openPasteGps('${t.id}')">📋 הדבקת מיקום שהתקבל</button>`}
       ${!isForm4(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
       ${!isForm4(t)&&t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
@@ -3267,10 +3276,101 @@ function itmToWgs84(E,Nn){
 function ntToggleManualGps(){
   const el=$('#nt_gps_manual'); if(el) el.hidden=!el.hidden;
 }
+/* ---------- פענוח מיקום שהודבק (וואטסאפ / מפות / טקסט) ----------
+   מחזיר {lat,lng} או null. תומך בפורמטים הנפוצים של שיתוף מיקום:
+   קישורי גוגל מפות, ווייז, אפל, geo:, וזוג מספרים פשוט. קישור
+   מקוצר אינו מכיל נקודות ציון ולכן מזוהה בנפרד. */
+const GEO_REGION=(la,ln)=>la>=29&&la<=34&&ln>=33&&ln<=37;
+const isShortMapLink=t=>/(?:maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/)/i.test(t||'');
+function pickPair(a,b){
+  if(!isFinite(a)||!isFinite(b)) return null;
+  if(GEO_REGION(a,b)) return {lat:a,lng:b};
+  if(GEO_REGION(b,a)) return {lat:b,lng:a};   /* הסדר התהפך */
+  return null;
+}
+function parseLocationText(raw){
+  if(!raw) return null;
+  let t=String(raw).trim();
+  try{ t=decodeURIComponent(t); }catch(e){}
+  t=t.replace(/‏|‎/g,'');
+  const num='(-?\\d{1,3}(?:\\.\\d+)?)';
+  let m=t.match(new RegExp('!3d'+num+'!4d'+num));
+  if(m){ const r=pickPair(parseFloat(m[1]),parseFloat(m[2])); if(r) return r; }
+  m=t.match(new RegExp('(?:[?&](?:q|query|ll|latlng|daddr|saddr|center|destination)=)(?:loc:)?'+num+'\\s*,\\s*'+num,'i'));
+  if(m){ const r=pickPair(parseFloat(m[1]),parseFloat(m[2])); if(r) return r; }
+  m=t.match(new RegExp('@'+num+',\\s*'+num));
+  if(m){ const r=pickPair(parseFloat(m[1]),parseFloat(m[2])); if(r) return r; }
+  m=t.match(new RegExp('geo:'+num+',\\s*'+num,'i'));
+  if(m){ const r=pickPair(parseFloat(m[1]),parseFloat(m[2])); if(r) return r; }
+  const cleaned=t.replace(/\b\d+(?:\.\d+)?z\b/gi,' ');   /* רמת זום */
+  m=cleaned.match(new RegExp('(?:^|[^\\d.\\-])'+num+'\\s*[,;\\s]\\s*'+num+'(?:[^\\d.]|$)'));
+  if(m){ const r=pickPair(parseFloat(m[1]),parseFloat(m[2])); if(r) return r; }
+  return null;
+}
+/* ---------- הדבקת מיקום לפניה קיימת ---------- */
+let _pgTmp=null;
+function openPasteGps(id){
+  const t=ticketById(id);
+  if(!canEdit(ME,t)){ toast('רק הגורם המטפל או מנהל על יכולים לעדכן פניה זו'); return; }
+  showModal(`<h2>📋 הדבקת מיקום <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">הדבק כאן מיקום שקיבלת — קישור ממפות גוגל או ווייז, או זוג נקודות ציון. המערכת תפענח ותציג לאישור לפני השמירה.</div>
+    <div class="field"><label class="req">המיקום</label>
+      <textarea id="pg_txt" rows="3" dir="ltr" style="text-align:left" placeholder="https://maps.google.com/?q=32.70123,35.29876" oninput="pasteGpsPreview()"></textarea></div>
+    <div id="pg_prev"></div>
+    <button class="btn btn-primary btn-block" id="pg_btn" onclick="doPasteGps('${id}')" disabled>שמירת המיקום</button>`);
+}
+function pasteGpsPreview(){
+  const raw=$('#pg_txt')?.value||'';
+  const box=$('#pg_prev'), btn=$('#pg_btn');
+  _pgTmp=null; if(btn) btn.disabled=true;
+  if(!box) return;
+  if(!raw.trim()){ box.innerHTML=''; return; }
+  const r=parseLocationText(raw);
+  if(!r){
+    box.innerHTML=isShortMapLink(raw)
+      ? `<div class="alert alert-warn">זהו קישור מקוצר, ואין בתוכו נקודות ציון. פתח אותו פעם אחת בדפדפן — הכתובת שתיפתח כוללת את הנקודה — והדבק אותה כאן.</div>`
+      : `<div class="alert alert-err">לא זוהה מיקום בטקסט שהודבק. ודא שהוא כולל קישור למפה או שני מספרים, לדוגמה 32.70123, 35.29876</div>`;
+    return;
+  }
+  const itm=wgs84ToITM(r.lat,r.lng);
+  _pgTmp=r;
+  if(btn) btn.disabled=false;
+  box.innerHTML=`<div class="alert alert-info">
+    נקלט: <b dir="ltr">${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}</b><br>
+    רשת ישראל: <b dir="ltr">${Math.round(itm.e)} / ${Math.round(itm.n)}</b><br>
+    <a class="link" href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank">פתיחה במפה לאימות לפני השמירה</a>
+  </div>`;
+}
+async function doPasteGps(id){
+  if(!_pgTmp){ toast('לא זוהה מיקום'); return; }
+  const btn=$('#pg_btn'); if(btn){ btn.disabled=true; btn.textContent='שומר…'; }
+  const {lat,lng}=_pgTmp;
+  const {error}=await sb.from('tickets')
+    .update({gps_lat:lat,gps_lng:lng,gps_at:new Date().toISOString()}).eq('id',id);
+  if(error){ if(btn){ btn.disabled=false; btn.textContent='שמירת המיקום'; } errToast(error); return; }
+  /* מתועד כמיקום שהתקבל ולא כנ.צ שנקלט בשטח — נ.צ מהמכשיר מעיד
+     שהגורם היה במקום, מיקום מודבק אינו מעיד. */
+  await addHistory(id,'מיקום שהתקבל ועודכן ידנית',
+    lat.toFixed(5)+', '+lng.toFixed(5)+' · הוזן ע"י '+(ME.name||''));
+  _pgTmp=null;
+  await loadAll(); closeModal(); render(); toast('✔ המיקום נשמר');
+}
+
 function ntApplyManualGps(){
+  /* קודם מנסים לפענח כמיקום מודבק (קישור / זוג נקודות), כדי
+     שאפשר יהיה להדביק ישירות לשדה הראשון */
+  const pasted=parseLocationText(($('#nt_x')?.value||''));
+  if(pasted){
+    _gpsTmp={lat:pasted.lat,lng:pasted.lng,at:Date.now()};
+    const itm0=wgs84ToITM(pasted.lat,pasted.lng);
+    const e0=$('#nt_gps');
+    if(e0) e0.textContent=`נקלט: ${pasted.lat.toFixed(5)}, ${pasted.lng.toFixed(5)} · ITM ${Math.round(itm0.e)}/${Math.round(itm0.n)}`;
+    toast('✔ המיקום נקלט');
+    return;
+  }
   const x=parseFloat(($('#nt_x')?.value||'').replace(/[^\d.\-]/g,''));
   const y=parseFloat(($('#nt_y')?.value||'').replace(/[^\d.\-]/g,''));
-  if(!isFinite(x)||!isFinite(y)){ toast('יש להזין שני ערכים מספריים'); return; }
+  if(!isFinite(x)||!isFinite(y)){ toast('יש להזין שני ערכים מספריים, או להדביק קישור למפה'); return; }
   const inRegion=(la,ln)=>la>=29&&la<=34&&ln>=33&&ln<=37;
   let lat=null,lng=null;
   if(Math.abs(x)<=180&&Math.abs(y)<=180){
