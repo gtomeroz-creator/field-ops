@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-10-29 א';
+const APP_VER='2026-11-02 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -2465,10 +2465,10 @@ async function setStatus(id,status){
       }catch(e){}
     }
   }
-  /* אירוע משותף: אם המקבילה עדיין פתוחה, מציעים לסגור גם אותה */
+  /* אירוע משותף: המקבילה נסגרת אוטומטית בשרת — רק מרעננים */
   if(status==='done'){
     const lt=t.linkedTicketId?ticketById(t.linkedTicketId):null;
-    if(lt&&lt.status!=='done') setTimeout(()=>offerCloseTwin(id,lt.id),400);
+    if(lt&&lt.status!=='done') setTimeout(()=>refresh(),900);
   }
 }
 /* ---------- סגירת הפניה המקבילה (אותו אירוע) ---------- */
@@ -2964,8 +2964,7 @@ async function doLinkTicket(id){
   /* אם אחת כבר סגורה והשנייה פתוחה — מציעים לסגור גם אותה */
   const A=ticketById(id), B=ticketById(target);
   if(A&&B){
-    if(A.status==='done'&&B.status!=='done') setTimeout(()=>offerCloseTwin(A.id,B.id),450);
-    else if(B.status==='done'&&A.status!=='done') setTimeout(()=>offerCloseTwin(B.id,A.id),450);
+    if((A.status==='done')!==(B.status==='done')) setTimeout(()=>refresh(),900);
   }
 }
 
@@ -3134,7 +3133,7 @@ async function doProxyClose(id){
     await loadAll(); closeModal(); render();
     toast('הפניה '+(num||'')+' נסגרה לפי דיווח טלפוני');
     const t=ticketById(id), lt=t&&t.linkedTicketId?ticketById(t.linkedTicketId):null;
-    if(lt&&lt.status!=='done') setTimeout(()=>offerCloseTwin(id,lt.id),400);
+    if(lt&&lt.status!=='done') setTimeout(()=>refresh(),900);
   }catch(e){
     if(btn){ btn.disabled=false; btn.textContent='סגירת הפניה'; }
     if(/dispatcher_close_ticket|function.*does not exist/i.test(e.message||''))
