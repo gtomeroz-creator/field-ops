@@ -4109,8 +4109,12 @@ function vUsers(u){
       <td>${w.id===u.id?ROLES[w.role]+' (אתה)':`<select style="width:auto;padding:6px 10px;font-size:13px" onchange="setRole('${w.id}',this.value)">
         ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${w.role===k?'selected':''}>${v}</option>`).join('')}</select>`}</td>
       <td>${w.active===false?'<span class="chip chip-late">מושבת</span>':'<span class="chip chip-done">פעיל</span>'}</td>
-      <td style="white-space:nowrap">${w.id!==u.id?`
-        ${w.active===false
+      <td style="white-space:nowrap">${w.id===u.id
+        /* בשורה של עצמך: עריכה ושיוך בלבד. השבתה, מחיקה ואיפוס
+           סיסמה חסומים כדי שלא תינעל מחוץ לחשבון שלך. */
+        ?`<button class="btn btn-outline btn-sm" onclick="openEditUser('${w.id}')">✏️ עריכה</button>
+          <button class="btn btn-outline btn-sm" onclick="editCities('${w.id}')">🎯 שיוך</button>`
+        :`${w.active===false
           ?`<button class="btn btn-success btn-sm" onclick="toggleActive('${w.id}',true)">הפעלה מחדש</button>
              <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser('${w.id}')">🗑 מחיקה</button>`
           :`${isTechEmail(w.email)
@@ -4119,7 +4123,7 @@ function vUsers(u){
              <button class="btn btn-outline btn-sm" onclick="openEditUser('${w.id}')">✏️ עריכה</button>
              <button class="btn btn-outline btn-sm" onclick="editCities('${w.id}')">🎯 שיוך</button>
              <button class="btn btn-warn btn-sm" onclick="toggleActive('${w.id}',false)">השבתה</button>`}
-      `:''}</td>
+      `}</td>
     </tr>`).join('')}</table>
   </div>`;
 }
@@ -4154,11 +4158,16 @@ async function saveCities(id){
 
 /* ---------- עריכת פרטי משתמש (מנהל-על) ---------- */
 function openEditUser(id){
-  const w=userById(id), tech=isTechEmail(w.email);
-  showModal(`<h2>✏️ עריכת ${esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
+  const w=userById(id), tech=isTechEmail(w.email), self=(id===ME.id);
+  showModal(`<h2>✏️ עריכת ${self?'הכרטיס שלך':esc(w.name)} <button class="x" onclick="closeModal()">×</button></h2>
     <div id="msg"></div>
     <div class="field"><label class="req">שם מלא</label><input id="eu_name" value="${esc(w.name)}"></div>
-    ${tech
+    ${self
+      /* פרטי הכניסה של עצמך אינם ניתנים לשינוי כאן: טעות הקלדה אחת
+         הייתה נועלת אותך מחוץ לחשבון, בלי דרך לתקן מתוך המערכת. */
+      ?`<div class="hint" style="margin-top:-8px;margin-bottom:12px">${tech?'מספר הטלפון שלך':'כתובת הדוא"ל שלך'} משמש לכניסה ואינו ניתן לשינוי מכאן, כדי שטעות הקלדה לא תנעל אותך מחוץ לחשבון. להחלפת סיסמה — הכפתור 🔑 בראש המסך.</div>
+        ${tech?'':`<div class="field"><label>טלפון</label><input id="eu_phone" type="tel" dir="ltr" style="text-align:left" value="${esc(w.phone||'')}"></div>`}`
+      :tech
       ?`<div class="field"><label class="req">מספר טלפון (משמש לכניסה)</label>
           <input id="eu_phone" type="tel" dir="ltr" style="text-align:left" inputmode="numeric" value="${esc(w.phone||w.email.replace(TECH_DOMAIN,''))}">
           <div class="hint">שינוי המספר מעדכן גם את פרטי הכניסה — העובד ייכנס מעתה עם המספר החדש (הסיסמה נשארת).</div></div>`
@@ -4173,16 +4182,19 @@ function openEditUser(id){
         <input id="eu_lic" dir="ltr" style="text-align:left" value="${esc(w.invLicense||'')}"></div>
       <div class="field"><label>שם משרד החקירות</label>
         <input id="eu_off" value="${esc(w.invOffice||'')}"></div>`:''}
-    <button class="btn btn-primary btn-block" id="eu_btn" onclick="saveEditUser('${id}',${tech})">שמירת שינויים</button>`);
+    <button class="btn btn-primary btn-block" id="eu_btn" onclick="saveEditUser('${id}',${tech},${self})">שמירת שינויים</button>`);
 }
-async function saveEditUser(id,tech){
+async function saveEditUser(id,tech,self){
   const w=userById(id), m=$('#msg'), btn=$('#eu_btn');
   const name=$('#eu_name').value.trim(), phone=normPhone($('#eu_phone')?.value||'');
   if(!name){ m.innerHTML='<div class="alert alert-err">יש למלא שם.</div>'; return; }
   btn.disabled=true; btn.textContent='שומר…';
   try{
     let newEmail=null;
-    if(tech){
+    /* בעריכה עצמית פרטי הכניסה אינם מוצגים ואינם משתנים */
+    if(self){
+      /* אין מה לעשות — שם, טלפון ליצירת קשר ופרטי חוקר בלבד */
+    }else if(tech){
       if(!phoneValid(phone)) throw new Error('מספר טלפון לא תקין (למשל 0501234567)');
       const t=phoneToEmail(phone);
       if(t!==w.email) newEmail=t;
@@ -4199,7 +4211,9 @@ async function saveEditUser(id,tech){
       }
       w.email=newEmail;
     }
-    const upd={name,phone};
+    /* שדה הטלפון אינו מוצג תמיד — בלי הבדיקה הזו שמירה הייתה מוחקת אותו */
+    const upd={name};
+    if($('#eu_phone')) upd.phone=phone;
     if($('#eu_lic')){ upd.investigator_license=$('#eu_lic').value.trim(); }
     if($('#eu_off')){ upd.investigation_office=$('#eu_off').value.trim(); }
     const {error:e2}=await sb.from('profiles').update(upd).eq('id',id);
@@ -4208,10 +4222,13 @@ async function saveEditUser(id,tech){
         throw new Error('יש להריץ קודם את תוספת ה-SQL של חקירת גניבת מים');
       throw e2;
     }
-    w.name=name; w.phone=phone;
+    w.name=name;
+    if(upd.phone!==undefined) w.phone=phone;
+    if(id===ME.id) ME.name=name;
     if(upd.investigator_license!==undefined) w.invLicense=upd.investigator_license;
     if(upd.investigation_office!==undefined) w.invOffice=upd.investigation_office;
-    closeModal(); render(); toast('הפרטים של '+name+' עודכנו');
+    if(id===ME.id){ ME.invLicense=w.invLicense; ME.invOffice=w.invOffice; }
+    closeModal(); render(); toast(id===ME.id?'הפרטים שלך עודכנו':'הפרטים של '+name+' עודכנו');
   }catch(e){
     btn.disabled=false; btn.textContent='שמירת שינויים';
     m.innerHTML=`<div class="alert alert-err">${esc(e.message)}</div>`;
