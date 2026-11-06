@@ -66,7 +66,7 @@ label{display:block;font-weight:600;font-size:13.5px;margin-bottom:5px;color:var
 .wrap{max-width:1080px;margin:0 auto;padding:0 16px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
 .grid{display:grid;gap:14px}
-@media(min-width:720px){.grid-2{grid-template-columns:1fr 1fr}.grid-4{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:720px){.grid-2{grid-template-columns:1fr 1fr}.grid-3{grid-template-columns:repeat(3,1fr)}.grid-4{grid-template-columns:repeat(4,1fr)}}
 @media(max-width:719px){.grid-4{grid-template-columns:repeat(2,1fr)}}
 
 /* topbar */
@@ -203,7 +203,7 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 'use strict';
 
 /* ---------- חיבור לשרת ---------- */
-const APP_VER='2026-11-02 א';
+const APP_VER='2026-11-06 א';
 const ORG_NAME='תאגיד הרי נצרת';
 /* סיבות לחריגה מיעד הטיפול — רשימה סגורה, בשתי קבוצות */
 const BREACH_REASONS={
@@ -249,15 +249,17 @@ let RECOVERY=false;             /* חזרה מקישור איפוס סיסמה *
 
 /* ---------- קבועים (זהים לגרסה הקודמת) ---------- */
 const CITIES=['נצרת','ריינה','יפיע','איכסל','עילוט'];
-const ROLES={super:'מנהל על', manager:'מנהלן', dispatcher:'מוקדן', field:'איש שטח', contractor:'קבלן'};
+const ROLES={super:'מנהל על', manager:'מנהלן', dispatcher:'מוקדן', field:'איש שטח', contractor:'קבלן', investigator:'חוקר'};
 const isMgr=u=>u&&(u.role==='super'||u.role==='manager');
 const isDispatchLike=u=>u&&(u.role==='super'||u.role==='manager'||u.role==='dispatcher');
-const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor');
+const isFieldLike=u=>u&&(u.role==='field'||u.role==='contractor'||u.role==='investigator');
+/* חוקר — גורם חיצוני. רואה אך ורק פניות חקירה; נאכף גם בשרת */
+const isInvestigator=u=>u&&u.role==='investigator';
 const DOMAINS={W:{name:'מים',chip:'chip-water'}, S:{name:'ביוב',chip:'chip-sewage'}, G:{name:'כללי',chip:'chip-general'}};
 const TYPES={
   W:['נזילה','פיצוץ','תלונת צרכן - אין מים','החלפת מונה שבור','בדיקת שטח למד מים','התקנת חיבור חדש למגרש','התקנת מונה','החלפת מונה','תלונה על איכות מים','הפסקת מים','אחר'],
   S:['גלישת ביוב','שבר בשוחה / במכסה שוחה','תלונה על ריח','בקשה להכנת חיבור מגרש','אחר'],
-  G:['אי החזרת המצב לקדמותו','בקשה להיתר בניה','טופס בדיקה לטופס 4']
+  G:['אי החזרת המצב לקדמותו','בקשה להיתר בניה','טופס בדיקה לטופס 4','חשד לגניבת מים']
 };
 /* הודעות קבועות לפי סוג פניה — מוצגות לגורם המטפל בכרטיס.
    להוספת הודעה לסוג נוסף: שורה אחת כאן, ותו לא. */
@@ -265,6 +267,12 @@ const TYPE_NOTICE={
   'בקשה להיתר בניה':'נא להגיע לשיחה בנושא עם הישאם במשרדי התאגיד'
 };
 const FORM4='טופס בדיקה לטופס 4';
+const THEFT='חשד לגניבת מים';
+const isTheft=t=>t&&t.type===THEFT;
+/* בחשד לגניבת מים הפניה נפתחת לפני שידוע מיהו המחזיק — שם,
+   טלפון וכתובת אינם חובה, והם מתמלאים בהמשך בטופס החקירה. */
+const NO_CUSTOMER_TYPES=[THEFT];
+const needsCustomer=type=>!NO_CUSTOMER_TYPES.includes(type);
 /* סוגים שבהם מתוקן קו ולכן נדרש קוטר הצינור */
 const PIPE_TYPES=['נזילה','פיצוץ','גלישת ביוב'];
 const needsPipe=t=>t&&PIPE_TYPES.includes(t.type);
@@ -277,7 +285,8 @@ const ticketTerm=t=>openedByDispatcher(t)?'פניית מוקד':'פקודת עב
 /* סוגים שהוחלפו — אינם מוצעים בפתיחת פניה, אך נשמרים לדוחות היסטוריים */
 const LEGACY_TYPES={W:['נזילה / פיצוץ מים']};
 const F4_PHOTOS={f4_main_meter:'מד מים ראשי',f4_sub_meters:'מדי מים משניים',f4_meter_location:'מיקום המד',f4_fire:'מערכת כיבוי אש',f4_sewage:'בדיקת ביוב',f4_drainage:'מערכת ניקוז',f4_pool_water:'בריכה — חיבור מים',f4_pool:'בריכה — חיבור ביוב'};
-const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים'};
+const INV_PHOTOS={inv_connection:'החיבור / השיבוש',inv_meter:'מד המים',inv_property:'הנכס וסביבתו',inv_sequence:'רצף מקשר — מהחיבור אל הנכס',inv_other:'תיעוד נוסף'};
+const WORK_AREAS={faults:'תקלות שטח', meters:'מונים', connections:'חיבורים והנדסה', water_quality:'איכות מים', investigation:'חקירות'};
 const TYPE_AREA={
  'נזילה':'faults','פיצוץ':'faults','תלונת צרכן - אין מים':'faults',
  'נזילה / פיצוץ מים':'faults','גלישת ביוב':'faults','שבר בשוחה / במכסה שוחה':'faults',
@@ -286,7 +295,8 @@ const TYPE_AREA={
  'הפסקת מים':'dispatch',  /* מטופל ע"י מוקדנים - סינון מיוחד */
  'התקנת מונה':'meters','החלפת מונה':'meters','החלפת מונה שבור':'meters','בדיקת שטח למד מים':'meters',
  'התקנת חיבור חדש למגרש':'connections','בקשה להכנת חיבור מגרש':'connections','אי החזרת המצב לקדמותו':'connections',
- 'טופס בדיקה לטופס 4':'connections','בקשה להיתר בניה':'connections'
+ 'טופס בדיקה לטופס 4':'connections','בקשה להיתר בניה':'connections',
+ 'חשד לגניבת מים':'investigation'
 };
 const STATUSES={open:'פתוחה',progress:'בטיפול',ongoing:'בטיפול מתמשך',done:'הושלמה'};
 const STATUS_CHIP={open:'chip-open',progress:'chip-progress',ongoing:'chip-transfer',done:'chip-done'};
@@ -349,6 +359,11 @@ function usersForTicket(city,type,showAll){
   if(area==='dispatch'){
     return list.filter(u=>u.role==='dispatcher'||u.role==='super');
   }
+  /* חקירה: רק חוקרים ומנהל-על. שיוך לגורם אחר היה יוצר פניה
+     שאיש אינו רואה — החוקר חסום בשרת, והאחר אינו חוקר. */
+  if(area==='investigation'){
+    return list.filter(u=>u.role==='investigator'||u.role==='super');
+  }
   if(city) list=list.filter(u=>!(u.cities&&u.cities.length)||u.cities.includes(city));
   if(area) list=list.filter(u=>!(u.workAreas&&u.workAreas.length)||u.workAreas.includes(area));
   return list;
@@ -372,8 +387,14 @@ function rebuildAssign(){
   if(h){
     if(TYPE_AREA[type]==='dispatch') h.innerHTML='🚱 הפסקת מים: הפניה תשויך למוקדן שיטפל בעדכון התושבים ובתיאום. מומלץ לשלוח לקבוצות הוואטסאפ הרלוונטיות מיד לאחר הפתיחה (הכפתור יופיע).';
     else if(TYPE_AREA[type]==='water_quality') h.innerHTML='💧 איכות מים: מוצגים רק גורמים המוגדרים לתחום זה.';
+    else if(TYPE_AREA[type]==='investigation') h.innerHTML='🔎 חקירה: מוצגים רק חוקרים. פרטי המחזיק אינם חובה בשלב זה — הם ייקבעו בטופס החקירה.';
     else h.innerHTML='מוצגים הגורמים הרלוונטיים לישוב ולסוג הפניה שנבחרו. הפניה משויכת פעם אחת בעת הקמתה; לאחר מכן כל גורם שקיבל אותה יכול להעבירה הלאה.';
   }
+  /* סימון החובה על שם, טלפון וכתובת נע לפי סוג הפניה */
+  const req=needsCustomer(type);
+  ['nt_l_cname','nt_l_phone','nt_l_addr'].forEach(id=>{
+    const el=$('#'+id); if(el) el.className=req?'req':'';
+  });
 }
 
 /* ---------- סיסמה: 8 תווים לפחות, חובה אותיות באנגלית ומספרים ---------- */
@@ -501,6 +522,7 @@ const _signing=new Set();
 function ticketPaths(t){
   const all=[...(t.photosBefore||[]),...(t.photosAfter||[]),...(t.docs||[])];
   Object.values(t.f4photos||{}).forEach(a=>all.push(...(a||[])));
+  Object.values(t.invphotos||{}).forEach(a=>all.push(...(a||[])));
   return all;
 }
 async function signTicketUrls(t){
@@ -545,6 +567,7 @@ function applyDetail(t){
   t.photosAfter=d.photos.after||[];
   t.docs=d.photos.doc||[];
   t.f4photos=Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,d.photos[k]||[]]));
+  t.invphotos=Object.fromEntries(Object.keys(INV_PHOTOS).map(k=>[k,d.photos[k]||[]]));
   t._detail=d.at;
 }
 /* מבטל את המטמון של פניה שהשתנתה, כדי שתיטען מחדש */
@@ -629,12 +652,14 @@ async function loadAll(){
     hi.data.forEach(h=>{ (histBy[h.ticket_id]??=[]).push({at:+new Date(h.at),by:h.by_user,action:h.action,note:h.note||''}); });
     ph.data.forEach(p=>{ const _b=(photosBy[p.ticket_id]??={before:[],after:[],doc:[]}); (_b[p.kind]??=[]).push({id:p.id,path:p.path,url:urlMap[p.path]||'',name:p.file_name||''}); });
 
-    DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active,cities:p.cities||[],workAreas:p.work_areas||[],createdAt:p.created_at?+new Date(p.created_at):0}));
+    DB.users=pr.data.map(p=>({id:p.id,name:p.name,email:p.email,phone:p.phone||'',role:p.role,active:p.active,cities:p.cities||[],workAreas:p.work_areas||[],createdAt:p.created_at?+new Date(p.created_at):0,
+      invLicense:p.investigator_license||'', invOffice:p.investigation_office||''}));
     DB.tickets=tk.data.map(t=>({
       id:t.id, number:t.number, domain:t.domain, type:t.type, city:t.city, address:t.address||'',
       blockNo:t.block_no||'', parcelNo:t.parcel_no||'',
       pipeDiameter:t.pipe_diameter||'',
       form4:t.form4||{},
+      investigation:t.investigation||{},
       customerName:t.customer_name||'', customerId:t.customer_id||'', customerPhone:t.customer_phone||'',
       description:t.description||'', status:t.status,
       createdAt:+new Date(t.created_at), createdBy:t.created_by, assignedTo:t.assigned_to,
@@ -656,7 +681,8 @@ async function loadAll(){
       photosBefore:(photosBy[t.id]||{}).before||[],
       photosAfter:(photosBy[t.id]||{}).after||[],
       docs:(photosBy[t.id]||{}).doc||[],
-      f4photos:Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]]))
+      f4photos:Object.fromEntries(Object.keys(F4_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]])),
+      invphotos:Object.fromEntries(Object.keys(INV_PHOTOS).map(k=>[k,(photosBy[t.id]||{})[k]||[]]))
     }));
     /* פניות שכבר נפתחו בעבר — מחזירים להן את הפרטים המלאים
        שנשמרו במטמון, כדי שלא ייעלמו אחרי כל רענון */
@@ -694,7 +720,7 @@ function writeCache(){
       const c={...t};
       const strip=a=>(a||[]).map(p=>({id:p.id,path:p.path,name:p.name,url:''}));
       c.photosBefore=strip(t.photosBefore); c.photosAfter=strip(t.photosAfter); c.docs=strip(t.docs);
-      c.f4photos={};
+      c.f4photos={}; c.invphotos={};
       return c;
     });
     store.set(CACHE_KEY,JSON.stringify({users:DB.users,tickets:slim,at:Date.now()}));
@@ -1086,7 +1112,8 @@ async function afterAuth(){
   /* הפרופיל נוצר ע"י טריגר — ננסה כמה פעמים אם עוד לא הספיק */
   for(let i=0;i<6;i++){
     const {data}=await sb.from('profiles').select('*').eq('id',session.user.id).maybeSingle();
-    if(data){ ME={id:data.id,name:data.name,email:data.email,phone:data.phone||'',role:data.role,active:data.active}; break; }
+    if(data){ ME={id:data.id,name:data.name,email:data.email,phone:data.phone||'',role:data.role,active:data.active,
+      invLicense:data.investigator_license||'', invOffice:data.investigation_office||''}; break; }
     await new Promise(r=>setTimeout(r,700));
   }
   if(!ME){ toast('שגיאה בטעינת הפרופיל — נסו לרענן'); return; }
@@ -1252,6 +1279,10 @@ function vHome(u){
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-water" style="padding:16px" onclick="openFoundFault()">🛠️ מצאתי תקלה — דיווח מהשטח</button>
     <button class="btn btn-danger" style="padding:16px" onclick="openOutage()">🚱 דיווח הפסקת מים</button>
+  </div>`:u.role==='investigator'?`
+  <div class="grid grid-2" style="margin-bottom:20px">
+    <button class="btn btn-water" style="padding:16px" onclick="openFoundFault(true)">🔎 איתרתי חשד לגניבת מים</button>
+    <button class="btn btn-outline" style="padding:16px" onclick="openInvProfile()">🪪 פרטי החוקר${!u.invLicense||!u.invOffice?' — להשלמה':''}</button>
   </div>`:u.role==='contractor'?'':`
   <div class="grid grid-2" style="margin-bottom:20px">
     <button class="btn btn-primary" style="padding:16px" onclick="route('newTicket')">➕ פתיחת פניה חדשה</button>
@@ -1775,6 +1806,9 @@ function visibleTickets(u){
   /* מנהל-על ומוקדן רואים הכל; כל השאר - רק פניות שפתחו, שמשויכות
      אליהם, שפעלו בהן בעבר, או המקבילות לאלה (השרת אוכף זאת ממילא) */
   if(u.role==='super'||u.role==='dispatcher') return list;
+  /* חוקר: פניות חקירה שלו בלבד. גם אם שויך בטעות לפניה אחרת —
+     היא לא תוצג. השרת אוכף את אותו כלל ממילא. */
+  if(isInvestigator(u)) return list.filter(t=>isTheft(t)&&(t.assignedTo===u.id||t.createdBy===u.id));
   /* מעבר יחיד על הרשימה. הנוסחה הקודמת סרקה את כל הפניות עבור
      כל פניה (O(n²)) — עם אלפי פניות זה הקפיא את המסך בכל רענון. */
   const involved=t=>t.createdBy===u.id||t.assignedTo===u.id||t.history.some(h=>h.by===u.id);
@@ -1805,8 +1839,10 @@ function applyFilters(){
 
 /* ---------- טופס פתיחת פניה ----------- */
 function typeOptions(domain,sel){
-  /* טופס בדיקה לטופס 4 נפתח ע"י מנהלן ומנהל-על בלבד */
-  return TYPES[domain].filter(t=>t!==FORM4||isMgr(ME))
+  /* טופס 4 וחשד לגניבת מים נפתחים ע"י מנהלן ומנהל-על בלבד.
+     החוקר פותח חשד לגניבת מים במסלול נפרד ("מצאתי גניבה"). */
+  const restricted=[FORM4,THEFT];
+  return TYPES[domain].filter(t=>!restricted.includes(t)||isMgr(ME))
     .map(t=>`<option ${t===sel?'selected':''}>${t}</option>`).join('');
 }
 function vNewTicket(u){
@@ -1821,14 +1857,14 @@ function vNewTicket(u){
       <div class="field"><label class="req">סוג פניה</label><select id="nt_type" onchange="rebuildAssign()">${typeOptions('W')}</select></div>
     </div>
     <div class="grid grid-2">
-      <div class="field"><label class="req">שם לקוח</label><input id="nt_cname"></div>
+      <div class="field"><label class="req" id="nt_l_cname">שם לקוח</label><input id="nt_cname"></div>
       <div class="field"><label>ת.ז. לקוח</label><input id="nt_cid" inputmode="numeric" dir="ltr" style="text-align:left"></div>
     </div>
     <div class="grid grid-2">
-      <div class="field"><label class="req">טלפון</label><input id="nt_phone" type="tel" dir="ltr" style="text-align:left"></div>
+      <div class="field"><label class="req" id="nt_l_phone">טלפון</label><input id="nt_phone" type="tel" dir="ltr" style="text-align:left"></div>
       <div class="field"><label class="req">ישוב / עיר</label><select id="nt_city" onchange="rebuildAssign()">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label class="req">כתובת</label><input id="nt_addr"></div>
+    <div class="field"><label class="req" id="nt_l_addr">כתובת</label><input id="nt_addr"></div>
     <div class="grid grid-2">
       <div class="field"><label>גוש</label><input id="nt_block" inputmode="numeric"></div>
       <div class="field"><label>חלקה</label><input id="nt_parcel" inputmode="numeric"></div>
@@ -1912,7 +1948,10 @@ async function attachNtFiles(ticketId){
 
 async function doNewTicket(){
   const cname=$('#nt_cname').value.trim(), phone=$('#nt_phone').value.trim(), addr=$('#nt_addr').value.trim();
-  if(!cname||!phone||!addr){ toast('יש למלא שם לקוח, טלפון וכתובת'); return; }
+  /* בחשד לגניבת מים פרטי המחזיק עדיין אינם ידועים — הם ייקבעו בחקירה */
+  if(needsCustomer($('#nt_type').value) && (!cname||!phone||!addr)){
+    toast('יש למלא שם לקוח, טלפון וכתובת'); return;
+  }
   const primary=$('#nt_assign').value, parallel=$('#nt_parallel').value;
   if(parallel && parallel===primary){ toast('הגורם המקביל חייב להיות שונה מהגורם הראשי'); return; }
   const btn=$('#nt_btn'); btn.disabled=true; btn.textContent='פותח פניה…';
@@ -1959,7 +1998,7 @@ function offerWhatsAppPair(id1,u1,id2,u2){
 }
 
 /* ---------- "מצאתי תקלה" ---------- */
-let _gpsTmp=null, _ffPhotos=[];
+let _gpsTmp=null, _ffPhotos=[], _ffTheft=false;
 /* רשימת השיוך ב"מצאתי תקלה": העובד עצמו, או ממונה בתאגיד */
 function ffAssignOpts(){
   const mgrs=activeUsers().filter(u=>isMgr(u)&&u.id!==ME.id)
@@ -1974,16 +2013,19 @@ function ffToChanged(){
   if(h) h.textContent=self?'הפניה תיפתח על שמך ותישאר אצלך לטיפול.'
     :'הפניה תיפתח על שמך עם התמונות והמיקום, ותועבר מיד לטיפולו. תוכל לעקוב אחריה תחת "פניות שהעברתי ולא נסגרו".';
 }
-function openFoundFault(){
+function openFoundFault(theft){
   if(ME.role==='contractor'){ toast('פתיחת פניות נעשית ע"י התאגיד — לדיווח על תקלה יש לפנות למוקד או לממונה'); return; }
-  _ffPhotos=[]; _gpsTmp=null;
-  showModal(`<h2>🛠️ מצאתי תקלה <button class="x" onclick="closeModal()">×</button></h2>
+  /* חוקר פותח תמיד תיק חקירה — אין לו מסלול אחר */
+  if(isInvestigator(ME)) theft=true;
+  _ffTheft=!!theft; _ffPhotos=[]; _gpsTmp=null;
+  showModal(`<h2>${_ffTheft?'🔎 איתרתי חשד לגניבת מים':'🛠️ מצאתי תקלה'} <button class="x" onclick="closeModal()">×</button></h2>
+    ${_ffTheft?`<div class="alert alert-info">הפניה תיפתח כתיק חקירה (סיווג כללי · חשד לגניבת מים) ותישאר אצלך לטיפול. פרטי המחזיק אינם נדרשים עכשיו — הם ימולאו בטופס החקירה.</div>`:`
     <div class="grid grid-2">
       <div class="field"><label class="req">סיווג</label>
         <select id="ff_domain" onchange="$('#ff_type').innerHTML=typeOptions(this.value)">
           <option value="W">מים</option><option value="S">ביוב</option><option value="G">כללי</option></select></div>
       <div class="field"><label class="req">סוג תקלה</label><select id="ff_type">${typeOptions('W')}</select></div>
-    </div>
+    </div>`}
     <div class="field"><label class="req">ישוב</label><select id="ff_city">${CITIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
     <div class="field"><label>כתובת / תיאור מיקום</label><input id="ff_addr"></div>
     <div class="field"><label>תיאור</label><textarea id="ff_desc" rows="3"></textarea></div>
@@ -2029,11 +2071,15 @@ async function doFoundFault(){
     /* הפניה נפתחת תמיד על שם המדווח — כך מתועד מי מצא את התקלה,
        והתמונות ניתנות להעלאה. ההעברה לממונה מתבצעת מיד אחר כך. */
     const t=await createTicketCloud({
-      domain:$('#ff_domain').value, type:$('#ff_type').value, city:$('#ff_city').value,
+      domain:_ffTheft?'G':$('#ff_domain').value,
+      type:_ffTheft?THEFT:$('#ff_type').value,
+      city:$('#ff_city').value,
       address:$('#ff_addr').value.trim(), description:$('#ff_desc').value.trim(),
       assignedTo:ME.id, foundByField:true, gps:_gpsTmp
     });
-    await addHistory(t.id,'דיווח מהשטח','נפתחה ע"י '+(ME.name||'איש שטח')+' — "מצאתי תקלה"');
+    await addHistory(t.id,'דיווח מהשטח',_ffTheft
+      ?'נפתחה ע"י '+(ME.name||'חוקר')+' — חשד לגניבת מים שאותר בשטח'
+      :'נפתחה ע"י '+(ME.name||'איש שטח')+' — "מצאתי תקלה"');
     if(_ffPhotos.length){ await uploadDataUrls(t.id,'before',_ffPhotos); _ffPhotos=[]; }
     _gpsTmp=null;
     let moved=false, moveErr=null;
@@ -2190,6 +2236,7 @@ function vTicket(u,id){
   })():''}
 
   ${isForm4(t)?f4Card(u,t):''}
+  ${isTheft(t)?invCard(u,t):''}
 
   ${t.status==='ongoing'?`
   <div class="card" style="margin-bottom:14px;border-color:var(--transfer);background:#faf7fe">
@@ -2231,26 +2278,30 @@ function vTicket(u,id){
     <div class="section-t">⚙️ עדכון סטטוס ופעולות</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       ${!isForm4(t)&&t.status!=='progress'?`<button class="btn btn-warn" onclick="setStatus('${t.id}','progress')">▶ התחלת טיפול</button>`:''}
-      ${isForm4(t)?'':`<button class="btn btn-success" onclick="confirmClose('${t.id}')">✔ סימון הושלמה</button>`}
+      ${isForm4(t)||isTheft(t)?'':`<button class="btn btn-success" onclick="confirmClose('${t.id}')">✔ סימון הושלמה</button>`}
       <button class="btn btn-outline" onclick="openTransfer('${t.id}')">↪ העברה לגורם אחר</button>
       ${isForm4(t)&&isMgr(u)&&t.status!=='done'?`<button class="btn btn-success" onclick="f4Close('${t.id}')">✔ סיום התהליך וסגירת הטופס</button>`:''}
+      ${isTheft(t)&&isMgr(u)&&t.status!=='done'?`<button class="btn btn-success" onclick="invClose('${t.id}')">✔ אישור הדוח וסגירת התיק</button>`:''}
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="grabTicketGPS('${t.id}')">📍 תיעוד נ.צ ביצוע</button>`}
       ${isForm4(t)?'':`<button class="btn btn-outline" onclick="openPasteGps('${t.id}')">📋 הדבקת מיקום שהתקבל</button>`}
-      ${!isForm4(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
+      ${!isForm4(t)&&!isTheft(t)&&t.status!=='ongoing'?`<button class="btn" style="background:var(--transfer);color:#fff" onclick="openOngoing('${t.id}')">🔧 נדרש טיפול מתמשך</button>`:''}
       ${!isForm4(t)&&t.domain==='W'&&!t.outage&&!t.linkedTicketId?`<button class="btn btn-danger" onclick="escalateToOutage('${t.id}')">🚱 נדרשת הפסקת מים לתיקון</button>`:''}
     </div>
-    <div class="hint" style="margin-top:8px">${isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.'):'מומלץ לצרף תמונת "אחרי" ולתעד נ.צ לפני הסגירה. לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
+    <div class="hint" style="margin-top:8px">${
+      isForm4(t)?(isMgr(u)?'מי שממלא מעביר הלאה; סגירת הטופס נעשית ע"י מנהל בתום התהליך.':'בסיום המילוי — העברה לגורם הממשיך בתאגיד. הטופס ייסגר ע"י מנהל בתום התהליך.')
+      :isTheft(t)?'החוקר ממלא את טופס החקירה ומפיק את הדוח. התיק נסגר ע"י מנהל בתאגיד לאחר קבלת הדוח.'
+      :'מומלץ לצרף תמונת "אחרי" ולתעד נ.צ לפני הסגירה. לאחר העברה — רק הגורם החדש יוכל לעדכן.'}</div>
     ${needsPipe(t)?`<div class="field" style="margin-top:14px"><label>קוטר הצינור שתוקן</label>
       <input id="pipe" value="${esc(t.pipeDiameter)}" placeholder="לדוגמה: 110 מ״מ" onchange="savePipe('${t.id}')">
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
         ${(PIPE_QUICK[t.domain]||[]).map(d=>`<button class="btn btn-outline btn-sm" onclick="pipeQuick('${t.id}','${d}')">${d}</button>`).join('')}
       </div>
       <div class="hint" style="margin-top:5px">הכפתורים ממלאים מהיר; אפשר גם להקליד כל ערך.</div></div>`:''}
-    ${isForm4(t)?'':`<div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
+    ${isForm4(t)||isTheft(t)?'':`<div class="field" style="margin-top:14px"><label>פעולות שבוצעו (מלל חופשי)</label>
       <textarea id="wlog" rows="3" onchange="saveWorkLog('${t.id}')">${esc(t.workLog)}</textarea></div>`}
   </div>`:''}
   ${!canEdit(u,t)&&t.status!=='done'?`<div class="alert alert-info">פניה זו בטיפול ${esc(userName(t.assignedTo))} — הצפייה לקריאה בלבד.</div>
-    ${u.role==='dispatcher'&&!isForm4(t)?`<div class="card" style="padding:14px;margin-top:10px">
+    ${u.role==='dispatcher'&&!isForm4(t)&&!isTheft(t)?`<div class="card" style="padding:14px;margin-top:10px">
       <div class="section-t" style="margin-top:0">☎ סגירה בשם הגורם המטפל</div>
       <div class="hint" style="margin-bottom:10px">כאשר איש השטח דיווח טלפונית שהטיפול הושלם ואינו יכול לעדכן בעצמו — קליטה חלשה, עומס או אמצעי לא זמין.</div>
       <button class="btn btn-success btn-block" onclick="openProxyClose('${t.id}')">✔ סגירה לפי דיווח טלפוני</button>
@@ -2373,10 +2424,11 @@ function addPhoto(ev,id,kind){
 async function viewPhoto(id,kind,i){
   await awaitDetail(id);
   const t=ticketById(id);
-  /* מקטעי טופס 4 מגיעים בפורמט 'f4:<kind>' */
+  /* מקטעי טופס 4 וחקירה מגיעים בפורמט 'f4:<kind>' / 'inv:<kind>' */
   const f4=kind.startsWith('f4:')?kind.slice(3):null;
-  const p=f4?(t.f4photos||{})[f4][i]:t[kind][i];
-  const storeKind=f4||(kind==='photosBefore'?'before':'after');
+  const inv=kind.startsWith('inv:')?kind.slice(4):null;
+  const p=f4?(t.f4photos||{})[f4][i]:inv?(t.invphotos||{})[inv][i]:t[kind][i];
+  const storeKind=f4||inv||(kind==='photosBefore'?'before':'after');
   showModal(`<h2>תצוגת תמונה <button class="x" onclick="closeModal()">×</button></h2>
     <img src="${p.url||PH_IMG}" style="width:100%;border-radius:12px">
     ${canEdit(ME,t)&&t.status!=='done'&&!OFFLINE?`<button class="btn btn-danger btn-sm btn-block" style="margin-top:10px" onclick="delPhoto('${id}','${storeKind}',${p.id},'${p.path}')">🗑 מחיקת תמונה</button>`:''}`);
@@ -2921,6 +2973,344 @@ ${photos?`<h2>תיעוד מצולם</h2>${photos}`:''}
   const w=window.open('','_blank');
   if(!w){ toast('החלון נחסם — יש לאשר חלונות קופצים בדפדפן'); return; }
   w.document.write(html); w.document.close();
+}
+
+/* ================= חשד לגניבת מים — טופס חקירה ================= */
+const INV_SOURCES=['דיווח קורא מדים','ביקורת שטח','תלונה','ניתוח צריכה','אחר'];
+const INV_PROPERTY=['מגורים','עסק','אתר בנייה','חקלאי','אחר'];
+/* סוגי האירוע — בחירה מרובה: תיק אחד יכול לכלול גם מעקף וגם שיבוש */
+const INV_KINDS={
+  direct:      {label:'חיבור ישיר ללא מד ("ניפל")', hint:'מיקום החיבור, קוטר, סוג צנרת'},
+  bypass:      {label:'מעקף מד-מים',                hint:'אופן המעקף, מצב המד'},
+  tamper:      {label:'שיבוש מדידה במזיד (סעיף 85)', hint:'מגנט / היפוך מד / פירוק / פגיעה במנגנון / אחר'},
+  reconnect:   {label:'חיבור מחדש לאחר ניתוק',      hint:'מועד הניתוק הקודם ואסמכתה'},
+  hydrant:     {label:'שימוש בהידרנט / חיבור כיבוי אש', hint:'פירוט'},
+  construction:{label:'חיבור לא חוקי באתר בנייה',   hint:'פירוט'},
+  other:       {label:'אחר',                        hint:'פירוט'}
+};
+function invGet(t){ return (t&&t.investigation)||{}; }
+/* פרטי החוקר נשמרים בכרטיס המשתמש וממולאים אוטומטית בדוח */
+function invWho(t){
+  const w=userById(t.assignedTo)||{};
+  return {name:w.name||'', license:w.invLicense||'', office:w.invOffice||''};
+}
+/* ערך מטופס החקירה, ואם לא מולא — מכרטיס הפניה */
+function invOr(f,key,fallback){ return (f[key]||'').trim()||fallback||''; }
+
+function invPhotoBlock(t,kind,editable){
+  const list=(t.invphotos||{})[kind]||[];
+  return `<div style="margin-top:6px">
+    <div class="photos">${list.map((p,i)=>`<img src="${p.url||PH_IMG}" onclick="viewPhoto('${t.id}','inv:${kind}',${i})">`).join('')||'<div class="hint">אין תמונות</div>'}</div>
+    ${editable?`<label class="btn btn-outline btn-sm" style="margin-top:5px">📷 צילום / העלאה — ${INV_PHOTOS[kind]}
+      <input type="file" accept="image/*" capture="environment" multiple hidden onchange="invAddPhotos(event,'${t.id}','${kind}')"></label>`:''}
+  </div>`;
+}
+function invAddPhotos(ev,id,kind){
+  const files=[...ev.target.files]; if(!files.length) return;
+  toast('שומר ומעלה תמונות…');
+  /* קודם שומרים את מה שכבר מולא — העלאת תמונה מרעננת את המסך */
+  invSave(id,true).then(()=>{
+    compressImages(files,async list=>{
+      try{ await uploadDataUrls(id,kind,list); await loadAll(); render(); toast('התמונות נוספו והממצאים נשמרו'); }
+      catch(e){ errToast(e,'שגיאה בהעלאת התמונות'); }
+    });
+  });
+  ev.target.value='';
+}
+
+/* --- סוגי האירוע: תיבות סימון עם פירוט לכל סוג שנבחר --- */
+let INV_K={};
+function invKindsHtml(){
+  return Object.entries(INV_KINDS).map(([k,d])=>{
+    const on=!!(INV_K[k]&&INV_K[k].on);
+    return `<div style="border:1px solid ${on?'var(--primary)':'var(--border)'};border-radius:8px;padding:8px;margin-bottom:7px">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;cursor:pointer;margin:0">
+        <input type="checkbox" style="width:auto" ${on?'checked':''} onchange="invToggleKind('${k}',this.checked)"> ${d.label}
+      </label>
+      ${on?`<div class="field" style="margin:7px 0 0"><label style="font-weight:400">${d.hint}</label>
+        <textarea rows="2" oninput="INV_K['${k}'].note=this.value">${esc((INV_K[k]||{}).note||'')}</textarea></div>
+        ${k==='reconnect'?`<div class="grid grid-2" style="margin-top:6px">
+          <div class="field" style="margin:0"><label style="font-weight:400">מועד הניתוק הקודם</label>
+            <input type="date" value="${esc(INV_K[k].cutAt||'')}" oninput="INV_K['${k}'].cutAt=this.value"></div>
+          <div class="field" style="margin:0"><label style="font-weight:400">אסמכתה</label>
+            <input value="${esc(INV_K[k].cutRef||'')}" oninput="INV_K['${k}'].cutRef=this.value"></div>
+        </div>`:''}`:''}
+    </div>`;
+  }).join('');
+}
+function invRenderKinds(){ const el=$('#inv_kinds'); if(el) el.innerHTML=invKindsHtml(); }
+function invToggleKind(k,on){
+  INV_K[k]=INV_K[k]||{note:'',cutAt:'',cutRef:''};
+  INV_K[k].on=on;
+  invRenderKinds();
+}
+/* תיאור סוגי האירוע כמשפט אחד — לדוח ולתצוגה */
+function invKindsText(f){
+  const sel=f.kinds||{};
+  return Object.keys(INV_KINDS).filter(k=>sel[k]&&sel[k].on).map(k=>{
+    const d=sel[k], extra=[];
+    if(d.note) extra.push(d.note);
+    if(k==='reconnect'){
+      if(d.cutAt) extra.push('מועד הניתוק הקודם: '+fmtDate(d.cutAt));
+      if(d.cutRef) extra.push('אסמכתה: '+d.cutRef);
+    }
+    return INV_KINDS[k].label+(extra.length?' — '+extra.join('; '):'');
+  });
+}
+
+/* --- כרטיס הטופס --- */
+function invCard(u,t){
+  const f=invGet(t), editable=canEdit(u,t)&&t.status!=='done';
+  const sel=(v,val)=>v===val?' selected':'';
+  const who=invWho(t);
+  const kindsText=invKindsText(f);
+
+  if(!editable){
+    const hasAny=kindsText.length||f.details||f.summary||f.source;
+    return `<div class="card" style="margin-bottom:14px;border-color:var(--primary)">
+      <div class="section-t">🔎 טופס חקירה — חשד לגניבת מים</div>
+      ${hasAny?`<dl class="kv">
+        ${f4Row('מקור המידע הראשוני',esc(f.source==='אחר'?(f.sourceOther||'אחר'):(f.source||'')))}
+        ${f4Row('מועד הביקור בשטח',f.visitAt?fmtDT(+new Date(f.visitAt)):'')}
+        ${f4Row('סוג הנכס',esc(f.propertyType==='אחר'?(f.propertyOther||'אחר'):(f.propertyType||'')))}
+        ${f4Row('מספר מד מים',esc(f.meterNo||''))}
+        ${f4Row('גוש / חלקה / תת-חלקה',esc([invOr(f,'blockNo',t.blockNo),invOr(f,'parcelNo',t.parcelNo),f.subParcel].filter(Boolean).join(' / ')))}
+        ${f4Row('המחזיק בפועל',esc([invOr(f,'holderName',t.customerName),f.holderId?'ת.ז/ח.פ '+f.holderId:'',invOr(f,'holderPhone',t.customerPhone)].filter(Boolean).join(' · ')))}
+        ${f4Row('סוג האירוע',kindsText.length?kindsText.map(esc).join('<br>'):'')}
+        ${f4Row('מיקום מדויק של החיבור',esc(f.locText||''))}
+        ${f4Row('תיאור טכני מפורט',esc(f.details||'').replace(/\n/g,'<br>'))}
+        ${f4Row('סיכום החוקר',esc(f.summary||'').replace(/\n/g,'<br>'))}
+        ${f4Row('חוקר מבצע',esc([who.name,who.license?'רישיון '+who.license:'',who.office].filter(Boolean).join(' · ')))}
+      </dl>
+      ${Object.keys(INV_PHOTOS).map(k=>((t.invphotos||{})[k]||[]).length?`<div style="margin-top:10px"><b style="font-size:13px">${INV_PHOTOS[k]}</b>${invPhotoBlock(t,k,false)}</div>`:'').join('')}
+      <button class="btn btn-outline btn-block" style="margin-top:12px" onclick="invPrint('${t.id}')">🖨 הפקת דוח חקירה</button>`
+      :'<div class="hint">הטופס טרם מולא.</div>'}
+    </div>`;
+  }
+
+  /* מצב עריכה */
+  INV_K={};
+  Object.keys(INV_KINDS).forEach(k=>{
+    const s=(f.kinds||{})[k]||{};
+    INV_K[k]={on:!!s.on,note:s.note||'',cutAt:s.cutAt||'',cutRef:s.cutRef||''};
+  });
+
+  return `<div class="card" style="margin-bottom:14px;border-color:var(--primary)">
+    <div class="section-t">🔎 מילוי טופס חקירה — חשד לגניבת מים</div>
+    ${!who.license||!who.office?`<div class="alert alert-warn" style="margin-bottom:12px">
+      מספר הרישיון ושם משרד החקירות חסרים בכרטיס שלך, ולכן לא יופיעו בדוח.
+      ${isInvestigator(u)?'ניתן למלא אותם בכפתור 🪪 פרטי החוקר, במסך הראשי.':'מנהל על יכול להשלים אותם במסך המשתמשים.'}
+    </div>`:''}
+
+    <div class="grid grid-2">
+      <div class="field"><label>מקור המידע הראשוני</label>
+        <select id="inv_source" onchange="$('#inv_sourceOtherWrap').hidden=this.value!=='אחר'">
+          <option value="">—</option>${INV_SOURCES.map(x=>`<option${sel(f.source,x)}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label>מועד הביקור בשטח</label>
+        <input type="datetime-local" id="inv_visitAt" value="${esc(f.visitAt||'')}"></div>
+    </div>
+    <div class="field" id="inv_sourceOtherWrap" ${f.source==='אחר'?'':'hidden'}><label>פירוט מקור המידע</label>
+      <input id="inv_sourceOther" value="${esc(f.sourceOther||'')}"></div>
+
+    <div class="section-t" style="font-size:14px;margin-top:16px">זיהוי הנכס והמחזיק</div>
+    <div class="hint" style="margin-bottom:8px">הישוב והכתובת נלקחים מכרטיס הפניה. מה שימולא כאן גובר עליהם בדוח.</div>
+    <div class="grid grid-2">
+      <div class="field"><label>סוג הנכס</label>
+        <select id="inv_propertyType" onchange="$('#inv_propOtherWrap').hidden=this.value!=='אחר'">
+          <option value="">—</option>${INV_PROPERTY.map(x=>`<option${sel(f.propertyType,x)}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label>מספר מד מים (אם קיים)</label>
+        <input id="inv_meterNo" value="${esc(f.meterNo||'')}" dir="ltr" style="text-align:left"></div>
+    </div>
+    <div class="field" id="inv_propOtherWrap" ${f.propertyType==='אחר'?'':'hidden'}><label>פירוט סוג הנכס</label>
+      <input id="inv_propertyOther" value="${esc(f.propertyOther||'')}"></div>
+    <div class="grid grid-3">
+      <div class="field"><label>גוש</label><input id="inv_blockNo" inputmode="numeric" value="${esc(f.blockNo||t.blockNo||'')}"></div>
+      <div class="field"><label>חלקה</label><input id="inv_parcelNo" inputmode="numeric" value="${esc(f.parcelNo||t.parcelNo||'')}"></div>
+      <div class="field"><label>תת-חלקה</label><input id="inv_subParcel" inputmode="numeric" value="${esc(f.subParcel||'')}"></div>
+    </div>
+    <div class="grid grid-3">
+      <div class="field"><label>שם המחזיק בפועל</label><input id="inv_holderName" value="${esc(f.holderName||t.customerName||'')}"></div>
+      <div class="field"><label>ת.ז / ח.פ</label><input id="inv_holderId" dir="ltr" style="text-align:left" value="${esc(f.holderId||t.customerId||'')}"></div>
+      <div class="field"><label>טלפון</label><input id="inv_holderPhone" type="tel" dir="ltr" style="text-align:left" value="${esc(f.holderPhone||t.customerPhone||'')}"></div>
+    </div>
+
+    <div class="section-t" style="font-size:14px;margin-top:16px">תיאור טכני של החיבור / השיבוש</div>
+    <div class="hint" style="margin-bottom:8px">ניתן לסמן יותר מסוג אחד.</div>
+    <div id="inv_kinds">${invKindsHtml()}</div>
+
+    <div class="field" style="margin-top:12px"><label>תיאור טכני מפורט</label>
+      <textarea id="inv_details" rows="5" placeholder="מה נמצא, כיצד בוצע החיבור, מצב המד, היקף ההשפעה">${esc(f.details||'')}</textarea></div>
+    <div class="field"><label>מיקום מדויק של החיבור</label>
+      <input id="inv_locText" value="${esc(f.locText||'')}" placeholder="תיאור מילולי; את הנ.צ ניתן לתעד בכפתור 📍 למטה">
+      ${t.gps?`<div class="hint" style="margin-top:4px">נ.צ מתועד בפניה: <span dir="ltr">${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)}</span></div>`:'<div class="hint" style="margin-top:4px">טרם תועד נ.צ בפניה.</div>'}</div>
+
+    <div class="section-t" style="font-size:14px;margin-top:16px">תיעוד מצולם</div>
+    ${Object.keys(INV_PHOTOS).map(k=>`<div style="margin-top:8px"><b style="font-size:13px">${INV_PHOTOS[k]}</b>${invPhotoBlock(t,k,true)}</div>`).join('')}
+
+    <div class="field" style="margin-top:16px"><label>סיכום החוקר</label>
+      <textarea id="inv_summary" rows="4" placeholder="פסקת הסיכום כפי שתופיע בדוח, בניסוח שלך">${esc(f.summary||'')}</textarea>
+      <div class="hint" style="margin-top:4px">הטקסט הזה נכנס לדוח ככתבו, תחת הכותרת "סיכום".</div></div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-primary" onclick="invSave('${t.id}')">💾 שמירת הטופס</button>
+      <button class="btn btn-outline" onclick="invPrint('${t.id}')">🖨 הפקת דוח חקירה</button>
+    </div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <button class="btn btn-success btn-block" style="padding:14px;font-size:16px" onclick="openTransfer('${t.id}')">↪ סיימתי — העברת התיק לתאגיד</button>
+      <div class="hint" style="margin-top:5px;text-align:center">התיק נסגר ע"י מנהל בתאגיד לאחר קבלת הדוח.</div>
+    </div>
+  </div>`;
+}
+
+async function invSave(id,silent){
+  if(!$('#inv_details')) return;   /* הטופס אינו במצב עריכה */
+  const v=s=>($('#'+s)?.value||'').trim();
+  const kinds={};
+  Object.keys(INV_KINDS).forEach(k=>{
+    const s=INV_K[k]||{};
+    if(s.on) kinds[k]={on:true,note:(s.note||'').trim(),cutAt:s.cutAt||'',cutRef:(s.cutRef||'').trim()};
+  });
+  const data={
+    source:v('inv_source'), sourceOther:v('inv_sourceOther'), visitAt:v('inv_visitAt'),
+    propertyType:v('inv_propertyType'), propertyOther:v('inv_propertyOther'), meterNo:v('inv_meterNo'),
+    blockNo:v('inv_blockNo'), parcelNo:v('inv_parcelNo'), subParcel:v('inv_subParcel'),
+    holderName:v('inv_holderName'), holderId:v('inv_holderId'), holderPhone:v('inv_holderPhone'),
+    kinds, details:v('inv_details'), locText:v('inv_locText'), summary:v('inv_summary')
+  };
+  const {error}=await sb.from('tickets').update({investigation:data}).eq('id',id);
+  if(error){
+    if(/investigation/.test(error.message)) toast('יש להריץ קודם את תוספת ה-SQL של חקירת גניבת מים');
+    else errToast(error);
+    return;
+  }
+  ticketById(id).investigation=data;
+  if(silent) return;                       /* שמירה שקטה לפני העלאת תמונות */
+  await addHistory(id,'עדכון טופס חקירה');
+  await loadAll(); render(); toast('✔ הטופס נשמר — אפשר להמשיך לערוך בהמשך');
+}
+
+async function invClose(id){
+  await invSave(id,true);                      /* לא לאבד מילוי שטרם נשמר */
+  const {error}=await sb.from('tickets').update({status:'done'}).eq('id',id);
+  if(error){ errToast(error); return; }
+  await addHistory(id,'סגירת תיק חקירה','הדוח התקבל ואושר');
+  await loadAll(); render(); toast('✔ התיק נסגר');
+}
+
+/* --- דוח החקירה המסכם --- */
+async function invPrint(id){
+  await awaitDetail(id);
+  const t=ticketById(id), f=invGet(t), who=invWho(t);
+  const kinds=invKindsText(f);
+  const holder=invOr(f,'holderName',t.customerName);
+  const holderId=invOr(f,'holderId',t.customerId);
+  const block=invOr(f,'blockNo',t.blockNo), parcel=invOr(f,'parcelNo',t.parcelNo);
+  const place=[block?'גוש '+block:'',parcel?'חלקה '+parcel:'',f.subParcel?'תת-חלקה '+f.subParcel:'',
+               t.city,t.address].filter(Boolean).join(', ');
+  const visit=f.visitAt?new Date(f.visitAt):(t.createdAt?new Date(t.createdAt):null);
+  const vDate=visit?visit.toLocaleDateString('he-IL'):'—';
+  const vTime=visit?visit.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'—';
+  const gps=t.gps?`נ.צ ${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)}`:'';
+  const where=[t.city,t.address,f.locText,gps].filter(Boolean).join(', ');
+  const photos=Object.keys(INV_PHOTOS).map(k=>{
+    const list=(t.invphotos||{})[k]||[];
+    if(!list.length) return '';
+    return `<div class="pg"><h3>${INV_PHOTOS[k]}</h3><div class="imgs">${list.map(p=>`<img src="${p.url}">`).join('')}</div></div>`;
+  }).join('');
+  const html=`<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<title>דוח חקירה — ${t.number}</title>
+<style>
+@page{size:A4;margin:15mm}
+body{font-family:"Heebo",Arial,sans-serif;direction:rtl;color:#111;font-size:11.5pt;line-height:1.7;margin:0}
+.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
+.hdr img{height:60px}
+.to{font-size:11.5pt}
+h1{font-size:17pt;color:#0B4F6C;text-align:center;margin:18px 0 4px;letter-spacing:.5px}
+.caseline{text-align:center;font-size:11pt;color:#444;margin-bottom:18px}
+h2{font-size:12.5pt;color:#0B4F6C;margin:16px 0 4px}
+p{margin:0 0 8px;text-align:justify}
+ul{margin:4px 0 8px;padding-inline-start:20px}
+.party{border:1px solid #ccc;border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:11pt;background:#F7FAFC}
+.imgs{display:flex;flex-wrap:wrap;gap:6px}
+.imgs img{max-width:31%;border:1px solid #ccc;border-radius:4px}
+.pg{margin-bottom:10px}
+.pg h3{font-size:11pt;color:#0B4F6C;margin:8px 0 4px}
+.sign{margin-top:30px;font-size:11pt}
+.sign b{display:block;margin-bottom:2px}
+.foot{margin-top:18px;font-size:9pt;color:#666;text-align:center;border-top:1px solid #ddd;padding-top:6px}
+@media print{ .noprint{display:none} }
+</style></head><body>
+<div class="hdr">
+  <div class="to"><b>לכבוד:</b><br>${ORG_NAME}</div>
+  <img src="${LOGO_SRC}" alt="">
+</div>
+
+<h1>דוח חקירה</h1>
+<div class="caseline">תיק מספר <b dir="ltr">${t.number}</b> · מיום ${vDate}</div>
+
+<div class="party">
+  <b>שם הצרכן:</b> ${esc(holder||'—')}${holderId?' &nbsp;·&nbsp; <b>ת.ז / ח.פ:</b> '+esc(holderId):''}<br>
+  <b>הנכס:</b> ${esc(place||'—')}
+  ${f.propertyType?'<br><b>סוג הנכס:</b> '+esc(f.propertyType==='אחר'?(f.propertyOther||'אחר'):f.propertyType):''}
+  ${f.meterNo?'<br><b>מספר מד מים:</b> <span dir="ltr">'+esc(f.meterNo)+'</span>':''}
+</div>
+
+<h2>כללי</h2>
+<p>נתבקשנו על ידכם לבצע חקירה אודות נסיבות אירוע של חשד לגניבת מים${where?' ב'+esc(where):''}.
+${f.source?'מקור המידע הראשוני: '+esc(f.source==='אחר'?(f.sourceOther||'אחר'):f.source)+'.':''}</p>
+${kinds.length?`<p>סוג האירוע הנבדק:</p><ul>${kinds.map(k=>'<li>'+esc(k)+'</li>').join('')}</ul>`:''}
+
+<h2>החקירה</h2>
+<p>בתאריך ${vDate} בשעה ${vTime}, לאחר חקירה פיזית יסודית, איתרנו את הממצאים הבאים:</p>
+<p>${esc(f.details||'—').replace(/\n/g,'<br>')}</p>
+${photos?'<p>מצ"ב תמונות בסוף הדוח.</p>':''}
+
+<h2>סיכום</h2>
+<p>${esc(f.summary||'—').replace(/\n/g,'<br>')}</p>
+
+<div class="sign">
+  <b>חוקר מבצע:</b>
+  ${esc(who.name||'—')}${who.license?' · מספר רישיון '+esc(who.license):''}<br>
+  ${esc(who.office||'')}
+  <br><br>חתימה: ______________
+</div>
+
+${photos?`<h2>נספח — תיעוד מצולם</h2>${photos}`:''}
+
+<div class="foot">${ORG_NAME} · מסמך זה הופק ממערכת ניהול הפניות והמשימות</div>
+<div class="noprint" style="text-align:center;margin-top:16px">
+  <button onclick="window.print()" style="font-family:inherit;font-size:14px;padding:10px 26px;border:none;border-radius:8px;background:#0B4F6C;color:#fff;cursor:pointer">🖨 הדפסה / שמירה כ-PDF</button>
+</div>
+</body></html>`;
+  const w=window.open('','_blank');
+  if(!w){ toast('החלון נחסם — יש לאשר חלונות קופצים בדפדפן'); return; }
+  w.document.write(html); w.document.close();
+}
+
+/* --- פרטי החוקר: נשמרים פעם אחת וממולאים בכל דוח --- */
+function openInvProfile(){
+  showModal(`<h2>🪪 פרטי החוקר <button class="x" onclick="closeModal()">×</button></h2>
+    <div id="msg"></div>
+    <div class="alert alert-info">הפרטים האלה מופיעים אוטומטית בתחתית כל דוח חקירה שתפיק.</div>
+    <div class="field"><label>מספר רישיון חוקר פרטי</label>
+      <input id="ip_lic" dir="ltr" style="text-align:left" value="${esc(ME.invLicense||'')}"></div>
+    <div class="field"><label>שם משרד החקירות</label>
+      <input id="ip_off" value="${esc(ME.invOffice||'')}"></div>
+    <button class="btn btn-primary btn-block" id="ip_btn" onclick="saveInvProfile()">שמירה</button>`);
+}
+async function saveInvProfile(){
+  const lic=$('#ip_lic').value.trim(), off=$('#ip_off').value.trim();
+  const btn=$('#ip_btn'); btn.disabled=true; btn.textContent='שומר…';
+  const {error}=await sb.from('profiles')
+    .update({investigator_license:lic, investigation_office:off}).eq('id',ME.id);
+  if(error){
+    btn.disabled=false; btn.textContent='שמירה';
+    $('#msg').innerHTML=`<div class="alert alert-err">${esc(/investigator_license/.test(error.message)?'יש להריץ קודם את תוספת ה-SQL של חקירת גניבת מים':error.message)}</div>`;
+    return;
+  }
+  ME.invLicense=lic; ME.invOffice=off;
+  const w=userById(ME.id); if(w){ w.invLicense=lic; w.invOffice=off; }
+  closeModal(); render(); toast('הפרטים נשמרו');
 }
 
 /* ---------- קישור ידני של שתי פניות לאירוע משותף ---------- */
@@ -3776,6 +4166,12 @@ function openEditUser(id){
           <input id="eu_email" type="email" dir="ltr" style="text-align:left" value="${esc(w.email)}">
           <div class="hint">שינוי הכתובת מעדכן את פרטי הכניסה — העובד ייכנס מעתה עם הכתובת החדשה (הסיסמה נשארת).</div></div>
         <div class="field"><label>טלפון</label><input id="eu_phone" type="tel" dir="ltr" style="text-align:left" value="${esc(w.phone||'')}"></div>`}
+    ${w.role==='investigator'?`
+      <div class="section-t" style="font-size:14px">פרטי החוקר — מופיעים אוטומטית בכל דוח חקירה</div>
+      <div class="field"><label>מספר רישיון חוקר פרטי</label>
+        <input id="eu_lic" dir="ltr" style="text-align:left" value="${esc(w.invLicense||'')}"></div>
+      <div class="field"><label>שם משרד החקירות</label>
+        <input id="eu_off" value="${esc(w.invOffice||'')}"></div>`:''}
     <button class="btn btn-primary btn-block" id="eu_btn" onclick="saveEditUser('${id}',${tech})">שמירת שינויים</button>`);
 }
 async function saveEditUser(id,tech){
@@ -3802,9 +4198,18 @@ async function saveEditUser(id,tech){
       }
       w.email=newEmail;
     }
-    const {error:e2}=await sb.from('profiles').update({name,phone}).eq('id',id);
-    if(e2) throw e2;
+    const upd={name,phone};
+    if($('#eu_lic')){ upd.investigator_license=$('#eu_lic').value.trim(); }
+    if($('#eu_off')){ upd.investigation_office=$('#eu_off').value.trim(); }
+    const {error:e2}=await sb.from('profiles').update(upd).eq('id',id);
+    if(e2){
+      if(/investigator_license|investigation_office/.test(e2.message))
+        throw new Error('יש להריץ קודם את תוספת ה-SQL של חקירת גניבת מים');
+      throw e2;
+    }
     w.name=name; w.phone=phone;
+    if(upd.investigator_license!==undefined) w.invLicense=upd.investigator_license;
+    if(upd.investigation_office!==undefined) w.invOffice=upd.investigation_office;
     closeModal(); render(); toast('הפרטים של '+name+' עודכנו');
   }catch(e){
     btn.disabled=false; btn.textContent='שמירת שינויים';
