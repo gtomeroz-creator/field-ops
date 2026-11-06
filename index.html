@@ -197,6 +197,9 @@ table.rep td{padding:9px 8px;border-bottom:1px solid var(--border)}
 <body>
 <div id="app"></div>
 <div id="toast" hidden><div></div></div>
+<!-- מחוץ ל-app בכוונה: render בונה מחדש את כל תוכן app, וכל חלון
+     פתוח היה נמחק איתו — כולל כאלה שהמשתמש כבר הקליד לתוכם. -->
+<div id="modal-root"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 /* ================= ניהול אנשי שטח — גרסת ענן (Supabase) ================= */
@@ -1188,8 +1191,7 @@ function vShell(u){
   <div class="nav"><div class="wrap">
     ${tabs.map(([k,l])=>`<button class="${VIEW.name===k||(k==='tickets'&&VIEW.name==='ticket')?'on':''}" onclick="route('${k}')">${l}</button>`).join('')}
   </div></div>
-  <main><div class="wrap" id="inner"></div></main>
-  <div id="modal-root"></div>`;
+  <main><div class="wrap" id="inner"></div></main>`;
 }
 function renderInner(u){
   const el=$('#inner');
@@ -1479,6 +1481,7 @@ function trow(t,inWrap){
       ${t.outage?'<span class="chip chip-late">🚱 הפסקת מים</span>':''}
       ${t.status==='ongoing'?(t.plannedDate?`<span class="chip ${new Date(t.plannedDate+'T23:59:59').getTime()<Date.now()?'chip-late':'chip-transfer'}">🔧 ביצוע: ${fmtDate(t.plannedDate)}</span>`:'<span class="chip chip-late">🔧 ממתין לקביעת מועד</span>'):''}
       ${lt&&!inWrap?'<span class="chip chip-transfer">🔗 מקבילה</span>':''}
+      ${(()=>{const dm=distFromMe(t); return dm!=null?`<span class="chip chip-water">📍 ${fmtDist(dm)}</span>`:(MYPOS?'<span class="chip" style="background:var(--bg);color:var(--muted)">ללא נ.צ</span>':'');})()}
     </div>
     <div style="font-weight:700;font-size:14.5px;margin-bottom:3px">${esc(t.type)} · ${esc(t.city)}</div>
     <div class="desc">${esc([t.customerName,t.address].filter(Boolean).join(' · ')||t.description||'ללא פרטי פונה')}</div>
@@ -1549,7 +1552,39 @@ function filteredTickets(u){
   if(TF.from){ const a=new Date(TF.from+'T00:00:00').getTime(); list=list.filter(t=>t.createdAt>=a); }
   if(TF.to){ const b=new Date(TF.to+'T23:59:59').getTime(); list=list.filter(t=>t.createdAt<=b); }
   if(TF.q){ const q=TF.q; list=list.filter(t=>[t.number,t.address,t.customerName,t.customerPhone,t.description,t.type].join(' ').toLowerCase().includes(q)); }
+  /* מיון לפי קרבה גובר על כל מיון אחר — המשתמש ביקש אותו במפורש.
+     פניות ללא נ.צ יורדות לסוף במקום להתערבב באמצע. */
+  if(MYPOS){
+    list=[...list].sort((a,b)=>{
+      const da=distFromMe(a), db=distFromMe(b);
+      if(da==null&&db==null) return 0;
+      if(da==null) return 1;
+      if(db==null) return -1;
+      return da-db;
+    });
+  }
   return groupLinked(list);
+}
+/* ---------- מיון לפי קרבה למיקום הנוכחי ---------- */
+let MYPOS=null;
+function distFromMe(t){
+  if(!MYPOS||!t||!t.gps) return null;
+  return kmBetween(MYPOS.lat,MYPOS.lng,t.gps.lat,t.gps.lng);
+}
+function fmtDist(km){
+  if(km==null) return '';
+  return km<1 ? Math.round(km*1000)+' מ׳' : km.toFixed(1)+' ק״מ';
+}
+function nearMe(){
+  if(MYPOS){ MYPOS=null; render(); toast('המיון חזר לרגיל'); return; }
+  if(!navigator.geolocation){ toast('אין תמיכת מיקום בדפדפן'); return; }
+  toast('קולט מיקום…');
+  navigator.geolocation.getCurrentPosition(p=>{
+    MYPOS={lat:p.coords.latitude,lng:p.coords.longitude,at:Date.now()};
+    render();
+    toast('הרשימה מסודרת מהקרוב לרחוק');
+  },()=>toast('לא ניתן לקבל מיקום — יש לאשר הרשאת מיקום בדפדפן'),
+   {enableHighAccuracy:true,timeout:12000,maximumAge:60000});
 }
 function tfActive(){ return !!(TF.q||TF.domain||TF.status||TF.city||TF.assignee||TF.from||TF.to||TF.arg); }
 function clearFilters(){ TF={q:'',domain:'',status:'',city:'',assignee:'',from:'',to:'',arg:null}; render(); }
@@ -1789,7 +1824,10 @@ function vTickets(u){
     <select id="f_status" onchange="applyFilters()"><option value="">כל הסטטוסים</option><option value="open"${sel(TF.status,'open')}>פתוחה</option><option value="progress"${sel(TF.status,'progress')}>בטיפול</option><option value="ongoing"${sel(TF.status,'ongoing')}>בטיפול מתמשך</option><option value="done"${sel(TF.status,'done')}>הושלמה</option><option value="late"${sel(TF.status,'late')}>⏰ חריגה מיעד</option></select>
     <select id="f_city" onchange="applyFilters()"><option value="">כל הישובים</option>${CITIES.map(c=>`<option${sel(TF.city,c)}>${c}</option>`).join('')}</select>
     ${canExport(u)?`<select id="f_assignee" onchange="applyFilters()" title="הגורם שהפניה נמצאת אצלו כעת"><option value="">כל הגורמים המטפלים</option>${assignable.map(w=>`<option value="${w.id}"${sel(TF.assignee,w.id)}>${esc(w.name)}${w.role==='contractor'?' (קבלן)':''}</option>`).join('')}</select>`:''}
+    <button class="btn ${MYPOS?'btn-water':'btn-outline'} btn-sm" onclick="nearMe()"
+      title="${MYPOS?'חזרה למיון הרגיל':'סידור הרשימה מהפניה הקרובה אליך ביותר'}">📍 ${MYPOS?'ביטול מיון לפי קרבה':'הקרוב אליי'}</button>
   </div>
+  ${MYPOS?`<div class="alert alert-info" style="padding:8px 12px;font-size:13px">הרשימה מסודרת לפי המרחק ממיקומך הנוכחי${MYPOS.at?' (נקלט ב-'+new Date(MYPOS.at).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})+')':''}. פניות ללא נ.צ מופיעות בסוף.</div>`:''}
   ${canExport(u)?`<div class="filters" style="margin-bottom:10px;align-items:center">
     <span style="font-size:12.5px;color:var(--muted);align-self:center">📅 נפתחו בתקופה:</span>
     <button class="btn btn-outline btn-sm" onclick="tfPreset('month')">החודש</button>
@@ -1874,19 +1912,27 @@ function vNewTicket(u){
     </div>
     <div class="field"><label>מיקום גאוגרפי (לא חובה)</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-        <button class="btn btn-outline btn-sm" onclick="grabGPS('nt')">📍 מיקום GPS נוכחי</button>
-        <button class="btn btn-outline btn-sm" onclick="ntToggleManualGps()">⌨ הקלדת נקודות ציון</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="grabGPS('nt')">📍 מיקום GPS נוכחי</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="ntToggleManualGps()">📋 הדבקת מיקום או הקלדת נ.צ</button>
+        <label class="btn btn-outline btn-sm" style="margin:0">📄 מקובץ מיקום
+          <input type="file" accept=".url,.txt,.html,.htm" hidden onchange="ntLocFromFile(event)"></label>
         <span id="nt_gps" class="hint"></span>
       </div>
       <div id="nt_gps_manual" hidden>
+        <div class="field" style="margin:0 0 10px"><label>הדבקת מיקום שהתקבל</label>
+          <input id="nt_paste" dir="ltr" style="text-align:left" placeholder="קישור ממפות או מוואטסאפ, או 32.7015, 35.3021">
+          <button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="ntApplyPaste()">קליטת המיקום</button>
+          <div class="hint" style="margin-top:4px">קישור מגוגל מפות, ווייז, אפל, geo: או זוג נקודות. סדר הפוך מתוקן אוטומטית.</div></div>
+        <div style="border-top:1px solid var(--border);padding-top:10px">
+        <div class="hint" style="margin-bottom:6px">או הזנה ידנית — רשת ישראל (ITM) או קו אורך/רוחב:</div>
         <div class="grid grid-2" style="gap:8px">
           <div class="field" style="margin:0"><label>X (מזרח / קו אורך)</label>
-            <input id="nt_x" dir="ltr" style="text-align:left" placeholder="228416 · 35.3021 · או קישור למפה"></div>
+            <input id="nt_x" dir="ltr" style="text-align:left" placeholder="228416 או 35.3021"></div>
           <div class="field" style="margin:0"><label>Y (צפון / קו רוחב)</label>
             <input id="nt_y" inputmode="decimal" dir="ltr" style="text-align:left" placeholder="733948 או 32.7015"></div>
         </div>
-        <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="ntApplyManualGps()">קליטת הנקודה</button>
-        <div class="hint">ניתן להזין רשת ישראל (ITM) או קו אורך/רוחב — המערכת מזהה אוטומטית.</div>
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:6px" onclick="ntApplyManualGps()">קליטת הנקודה</button>
+        </div>
       </div></div>
     <div class="field"><label>תיאור במלל חופשי</label><textarea id="nt_desc" rows="3"></textarea></div>
     <div class="field"><label>קבצים מצורפים (תמונות ומסמכי PDF)</label>
@@ -2363,7 +2409,15 @@ function vTicket(u,id){
   <div class="grid grid-2">
     <div class="card">
       <div class="section-t">📍 מיקום ביצוע</div>
-      ${t.gps?`<div class="hint" style="margin-bottom:8px" dir="ltr">${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)}${t.gps.at?' · '+fmtDT(t.gps.at):''}</div><div id="tmap" class="map-box" style="height:220px"></div>`:'<div class="hint">טרם תועד מיקום GPS לפניה זו.</div>'}
+      ${t.gps?`<div class="hint" style="margin-bottom:8px" dir="ltr">${t.gps.lat.toFixed(5)}, ${t.gps.lng.toFixed(5)}${t.gps.at?' · '+fmtDT(t.gps.at):''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <a class="btn btn-sm" style="background:#33CCFF;color:#063" target="_blank" rel="noopener"
+             href="https://waze.com/ul?ll=${t.gps.lat},${t.gps.lng}&navigate=yes">🚗 ניווט בוויז</a>
+          <a class="btn btn-outline btn-sm" target="_blank" rel="noopener"
+             href="https://www.google.com/maps/dir/?api=1&destination=${t.gps.lat},${t.gps.lng}">🗺️ ניווט בגוגל מפות</a>
+          ${!t.address&&canEdit(u,t)?`<button class="btn btn-outline btn-sm" onclick="guessAddress('${t.id}')">🏷 זיהוי כתובת מהנ.צ</button>`:''}
+        </div>
+        <div id="tmap" class="map-box" style="height:220px"></div>`:'<div class="hint">טרם תועד מיקום GPS לפניה זו.</div>'}
     </div>
     <div class="card">
       <div class="section-t">🕓 היסטוריית סטטוסים ופעולות</div>
@@ -3290,6 +3344,44 @@ ${photos?`<h2>נספח — תיעוד מצולם</h2>${photos}`:''}
   w.document.write(html); w.document.close();
 }
 
+/* ===== זיהוי כתובת מנקודת ציון =====
+   מבוסס על OpenStreetMap. הכיסוי בישובים שלנו חלקי, ולכן זו
+   השלמה ולא מקור אמת: כתובת שהוזנה בידי אדם לעולם אינה נדרסת,
+   ושורה שלא נמצאה לה כתובת נשארת ריקה ולא מקבלת ניחוש. */
+let _geoLast=0;
+async function reverseGeocode(lat,lng){
+  /* מדיניות השירות: בקשה אחת לשנייה. ממתינים ולא נחסמים. */
+  const wait=Math.max(0,1100-(Date.now()-_geoLast));
+  if(wait) await new Promise(r=>setTimeout(r,wait));
+  _geoLast=Date.now();
+  const url='https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18'
+    +'&accept-language=he&lat='+lat+'&lon='+lng;
+  const res=await fetch(url,{headers:{Accept:'application/json'}});
+  if(!res.ok) throw new Error('שירות הכתובות החזיר '+res.status);
+  const j=await res.json();
+  const a=(j&&j.address)||{};
+  const street=a.road||a.pedestrian||a.residential||a.footway||'';
+  const area=a.neighbourhood||a.suburb||a.quarter||'';
+  const num=a.house_number||'';
+  const place=a.city||a.town||a.village||a.municipality||'';
+  const addr=[ [street,num].filter(Boolean).join(' '), street?'':area ].filter(Boolean).join(' ');
+  return {address:addr.trim(), place, raw:(j&&j.display_name)||''};
+}
+async function guessAddress(id){
+  const t=ticketById(id);
+  if(!t||!t.gps){ toast('אין נקודת ציון לפניה זו'); return; }
+  if(t.address){ toast('בפניה כבר רשומה כתובת — לא נדרסת אוטומטית'); return; }
+  toast('מזהה כתובת…');
+  try{
+    const r=await reverseGeocode(t.gps.lat,t.gps.lng);
+    if(!r.address){ toast('לא נמצאה כתובת לנקודה הזו — הכיסוי באזור חלקי'); return; }
+    const {error}=await sb.from('tickets').update({address:r.address}).eq('id',id);
+    if(error){ errToast(error); return; }
+    await addHistory(id,'זיהוי כתובת מנקודת ציון',r.address+(r.place?' · '+r.place:''));
+    await loadAll(); render(); toast('✔ נקלטה הכתובת: '+r.address);
+  }catch(e){ toast('לא ניתן לזהות כתובת כרגע: '+((e&&e.message)||'')); }
+}
+
 /* ===== ייבוא מרובה של תיקי חקירה מתיקיות =====
    כל תת-תיקיה = פניה אחת. התמונות שבה נכנסות למקטע "החיבור / השיבוש",
    וקובץ מיקום (url/txt) מספק את הנ.צ. */
@@ -3388,6 +3480,7 @@ async function bulkScan(ev){
       folder, photos:g.photos, loc, note,
       holderName:holder.name, holderId:holder.id,
       city:near?near.city:CITIES[0], km:near?near.km:null,
+      address:'', geoTried:false,
       include:true, dup:null, exists:false, result:null
     });
   }
@@ -3434,16 +3527,21 @@ function bulkRender(){
       <button type="button" class="btn btn-outline btn-sm" onclick="bulkAll(false)">ביטול הכול</button>
       <select style="width:auto;padding:6px 10px;font-size:13px" onchange="bulkSetCity(this.value);this.selectedIndex=0">
         <option value="">קביעת ישוב לכולם…</option>${CITIES.map(c=>`<option>${c}</option>`).join('')}</select>
+      <button type="button" class="btn btn-outline btn-sm" id="bi_geo" onclick="bulkGeocode()">🏷 זיהוי שמות רחובות</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="bulkGeocode(1)" title="בדיקה על התיק הראשון בלבד, לפני הרצה על כולם">🔎 בדיקה על אחד</button>
     </div>
+    <div class="hint" style="margin-bottom:10px">זיהוי הכתובות נעשה מול מפת OpenStreetMap ולוקח כשנייה לכל תיק. הכיסוי באזור חלקי — מה שלא יימצא יישאר ריק, בלי ניחוש.</div>
     ${noLoc?`<div class="alert alert-warn">${noLoc} תיקים ללא מיקום — ייובאו בלעדיו וניתן להשלים אותו בכרטיס.</div>`:''}
     <div style="max-height:46vh;overflow:auto;border:1px solid var(--border);border-radius:8px">
     <table class="rep" style="margin:0">
-      <tr><th style="width:34px"></th><th>תיקיה</th><th>תמונות</th><th>מיקום</th><th>ישוב</th><th>הערות</th></tr>
+      <tr><th style="width:34px"></th><th>תיקיה</th><th>תמונות</th><th>מיקום</th><th>כתובת</th><th>ישוב</th><th>הערות</th></tr>
       ${BIMP.map((r,i)=>`<tr style="${r.include?'':'opacity:.45'}">
         <td><input type="checkbox" ${r.include?'checked':''} style="width:auto" onchange="BIMP[${i}].include=this.checked;bulkRender()"></td>
         <td><b>${esc(r.folder)}</b></td>
         <td>${r.photos.length}</td>
         <td>${r.loc?`<span dir="ltr" style="font-size:12px">${r.loc.lat.toFixed(5)}, ${r.loc.lng.toFixed(5)}</span>`:'<span class="chip chip-late" style="font-size:10px">חסר</span>'}</td>
+        <td><input value="${esc(r.address||'')}" placeholder="${r.geoTried?'לא נמצאה':'—'}" style="width:140px;padding:4px 8px;font-size:12.5px"
+            oninput="BIMP[${i}].address=this.value"></td>
         <td><select style="width:auto;padding:4px 8px;font-size:12.5px" onchange="BIMP[${i}].city=this.value">
             ${CITIES.map(c=>`<option${c===r.city?' selected':''}>${c}</option>`).join('')}</select>
           ${r.km!=null&&r.km>1.5?'<div class="hint" style="font-size:11px">רחוק ממרכז הישוב — כדאי לאמת</div>':''}</td>
@@ -3463,6 +3561,29 @@ function bulkRender(){
 function bulkAll(v){ BIMP.forEach(r=>{ if(!r.exists||!v) r.include=v; }); bulkRender(); }
 function bulkSetCity(c){ if(!c) return; BIMP.forEach(r=>r.city=c); bulkRender(); }
 
+/* זיהוי שמות רחובות לתצוגה מקדימה. limit=1 — בדיקה על תיק אחד,
+   כדי לראות מה השירות מחזיר באזור לפני הרצה על כולם. */
+async function bulkGeocode(limit){
+  let rows=BIMP.filter(r=>r.loc&&!r.address);
+  if(limit) rows=rows.slice(0,limit);
+  if(!rows.length){ toast('אין תיקים עם נ.צ שממתינים לזיהוי'); return; }
+  const btn=$('#bi_geo'); if(btn) btn.disabled=true;
+  let found=0, failed=0, lastErr='';
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    const p=$('#bi_prog');
+    if(p) p.textContent=`מזהה כתובת ${i+1} מתוך ${rows.length} — ${r.folder}`;
+    r.geoTried=true;
+    try{
+      const g=await reverseGeocode(r.loc.lat,r.loc.lng);
+      if(g.address){ r.address=g.address; found++; }
+    }catch(e){ failed++; lastErr=(e&&e.message)||''; }
+  }
+  bulkRender();
+  if(failed&&!found) toast('זיהוי הכתובות נכשל: '+(lastErr||'השירות אינו זמין'));
+  else toast(`זוהו ${found} כתובות מתוך ${rows.length}${failed?` · ${failed} נכשלו`:''}`);
+}
+
 async function doBulkImport(){
   const assignee=($('#bi_assign')||{}).value;
   const parallel=($('#bi_parallel')||{}).value||'';
@@ -3479,7 +3600,7 @@ async function doBulkImport(){
     btn.textContent=`מייבא… ${i+1}/${rows.length}`;
     try{
       const base={
-        domain:'G', type:THEFT, city:r.city, address:'',
+        domain:'G', type:THEFT, city:r.city, address:(r.address||'').trim(),
         description:['ייבוא מתיקיה: '+r.folder,r.note].filter(Boolean).join(' · ')+' ',
         customerName:r.holderName, customerId:r.holderId,
         gps:r.loc?{lat:r.loc.lat,lng:r.loc.lng,at:Date.now()}:null
@@ -3907,6 +4028,41 @@ function itmToWgs84(E,Nn){
 function ntToggleManualGps(){
   const el=$('#nt_gps_manual'); if(el) el.hidden=!el.hidden;
 }
+/* קליטת המיקום שנקלט — משותף להדבקה, לקובץ ולהזנה ידנית */
+function ntSetGps(lat,lng,src){
+  _gpsTmp={lat,lng,at:Date.now()};
+  const itm=wgs84ToITM(lat,lng);
+  const el=$('#nt_gps');
+  if(el) el.textContent=`נקלט${src?' מ'+src:''}: ${lat.toFixed(5)}, ${lng.toFixed(5)} · ITM ${Math.round(itm.e)}/${Math.round(itm.n)}`;
+  toast('✔ המיקום נקלט');
+}
+function ntTakeText(raw,src){
+  const txt=(raw||'').trim();
+  if(!txt){ toast('לא נמצא טקסט לפענוח'); return false; }
+  if(isShortMapLink(txt)){
+    toast('קישור מקוצר אינו מכיל את הנקודה — יש לפתוח אותו בדפדפן ולהעתיק את הכתובת שנפתחה');
+    return false;
+  }
+  const p=parseLocationText(txt);
+  if(!p){ toast('לא זוהה מיקום בטקסט'); return false; }
+  ntSetGps(p.lat,p.lng,src);
+  return true;
+}
+function ntApplyPaste(){ ntTakeText($('#nt_paste')?.value,''); }
+/* קובץ מיקום — קיצור דרך של Windows (url), טקסט או דף שמור */
+function ntLocFromFile(ev){
+  const f=ev.target.files&&ev.target.files[0];
+  ev.target.value='';
+  if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    if(!ntTakeText(String(r.result||''),'קובץ')){
+      const el=$('#nt_gps_manual'); if(el) el.hidden=false;
+    }
+  };
+  r.onerror=()=>toast('לא ניתן לקרוא את הקובץ');
+  r.readAsText(f);
+}
 /* ---------- פענוח מיקום שהודבק (וואטסאפ / מפות / טקסט) ----------
    מחזיר {lat,lng} או null. תומך בפורמטים הנפוצים של שיתוף מיקום:
    קישורי גוגל מפות, ווייז, אפל, geo:, וזוג מספרים פשוט. קישור
@@ -3988,17 +4144,9 @@ async function doPasteGps(id){
 }
 
 function ntApplyManualGps(){
-  /* קודם מנסים לפענח כמיקום מודבק (קישור / זוג נקודות), כדי
-     שאפשר יהיה להדביק ישירות לשדה הראשון */
+  /* גם כאן מנסים קודם לפענח כקישור, למי שהדביק לשדה הלא נכון */
   const pasted=parseLocationText(($('#nt_x')?.value||''));
-  if(pasted){
-    _gpsTmp={lat:pasted.lat,lng:pasted.lng,at:Date.now()};
-    const itm0=wgs84ToITM(pasted.lat,pasted.lng);
-    const e0=$('#nt_gps');
-    if(e0) e0.textContent=`נקלט: ${pasted.lat.toFixed(5)}, ${pasted.lng.toFixed(5)} · ITM ${Math.round(itm0.e)}/${Math.round(itm0.n)}`;
-    toast('✔ המיקום נקלט');
-    return;
-  }
+  if(pasted){ ntSetGps(pasted.lat,pasted.lng,''); return; }
   const x=parseFloat(($('#nt_x')?.value||'').replace(/[^\d.\-]/g,''));
   const y=parseFloat(($('#nt_y')?.value||'').replace(/[^\d.\-]/g,''));
   if(!isFinite(x)||!isFinite(y)){ toast('יש להזין שני ערכים מספריים, או להדביק קישור למפה'); return; }
