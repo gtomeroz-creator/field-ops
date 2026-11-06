@@ -1849,6 +1849,9 @@ function vNewTicket(u){
   return `<div class="card" style="max-width:640px;margin:0 auto">
     <div class="section-t">➕ פתיחת פקודת עבודה</div>
     <div class="alert alert-info">מספר הפניה יוקצה אוטומטית בשרת: W (מים) / S (ביוב) / G (כללי) + שנה + חודש + מספר רץ.</div>
+    ${isMgr(u)?`<div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+      <button type="button" class="btn btn-outline btn-sm" onclick="openBulkImport()">📁 ייבוא תיקי חקירה מתיקיות</button>
+      <div class="hint" style="margin-top:5px">פתיחת פניה לכל תת-תיקיה, עם התמונות והמיקום שבתוכה.</div></div>`:''}
     <div class="grid grid-2">
       <div class="field"><label class="req">סיווג על</label>
         <select id="nt_domain" onchange="$('#nt_type').innerHTML=typeOptions(this.value);rebuildAssign()">
@@ -2976,7 +2979,7 @@ ${photos?`<h2>תיעוד מצולם</h2>${photos}`:''}
 }
 
 /* ================= חשד לגניבת מים — טופס חקירה ================= */
-const INV_SOURCES=['דיווח קורא מדים','ביקורת שטח','תלונה','ניתוח צריכה','אחר'];
+const INV_SOURCES=['דיווח קורא מדים','דיווח מנציג התאגיד','ביקורת שטח','תלונה','ניתוח צריכה','אחר'];
 const INV_PROPERTY=['מגורים','עסק','אתר בנייה','חקלאי','אחר'];
 /* סוגי האירוע — בחירה מרובה: תיק אחד יכול לכלול גם מעקף וגם שיבוש */
 const INV_KINDS={
@@ -3250,7 +3253,7 @@ ul{margin:4px 0 8px;padding-inline-start:20px}
 
 <div class="party">
   <b>שם הצרכן:</b> ${esc(holder||'—')}${holderId?' &nbsp;·&nbsp; <b>ת.ז / ח.פ:</b> '+esc(holderId):''}<br>
-  <b>הנכס:</b> ${esc(place||'—')}
+  <b>כתובת הנכס:</b> ${esc(place||'—')}
   ${f.propertyType?'<br><b>סוג הנכס:</b> '+esc(f.propertyType==='אחר'?(f.propertyOther||'אחר'):f.propertyType):''}
   ${f.meterNo?'<br><b>מספר מד מים:</b> <span dir="ltr">'+esc(f.meterNo)+'</span>':''}
 </div>
@@ -3285,6 +3288,245 @@ ${photos?`<h2>נספח — תיעוד מצולם</h2>${photos}`:''}
   const w=window.open('','_blank');
   if(!w){ toast('החלון נחסם — יש לאשר חלונות קופצים בדפדפן'); return; }
   w.document.write(html); w.document.close();
+}
+
+/* ===== ייבוא מרובה של תיקי חקירה מתיקיות =====
+   כל תת-תיקיה = פניה אחת. התמונות שבה נכנסות למקטע "החיבור / השיבוש",
+   וקובץ מיקום (url/txt) מספק את הנ.צ. */
+const CITY_COORD={'נצרת':[32.7021,35.2978],'ריינה':[32.7290,35.3130],
+  'יפיע':[32.6880,35.2690],'איכסל':[32.6830,35.3280],'עילוט':[32.7180,35.2520]};
+const _KLNG=Math.cos(32.70*Math.PI/180);
+function kmBetween(la1,ln1,la2,ln2){ return Math.hypot(la1-la2,(ln1-ln2)*_KLNG)*111.32; }
+function nearestCity(lat,lng){
+  let best=null;
+  for(const [c,[la,ln]] of Object.entries(CITY_COORD)){
+    const d=kmBetween(lat,lng,la,ln);
+    if(!best||d<best.km) best={city:c,km:d};
+  }
+  return best;
+}
+/* שם קובץ שהוא מזהה אקראי אינו נושא מידע; שם אחר — כן */
+const _UUIDNAME=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const _GENERICNAME=/^(img|image|photo|pic|dsc|whatsapp|screenshot|צילום)[\s_\-0-9]*$/i;
+function meaningfulName(fileName){
+  const base=fileName.replace(/\.[^.]+$/,'').replace(/^[\s\-_]+|[\s\-_]+$/g,'');
+  if(!base||_UUIDNAME.test(base)||_GENERICNAME.test(base)) return '';
+  /* שם קצר ("b") או חותמת זמן ללא אותיות אינם הערת שטח */
+  if(base.length<4) return '';
+  if(!/[A-Za-z֐-׿]/.test(base)) return '';
+  return base;
+}
+/* "ת.ז 316037761 חמודי זאיד" -> {id:'316037761', name:'חמודי זאיד'} */
+function parseHolderFromText(txt){
+  const out={id:'',name:''};
+  if(!txt) return out;
+  const m=txt.match(/ת\.?\s*ז\.?\s*[:\-–]?\s*(\d{7,9})/);
+  if(m){
+    out.id=m[1];
+    const rest=txt.replace(m[0],' ').replace(/[\-–_]+/g,' ').replace(/\s+/g,' ').trim();
+    if(rest&&/[֐-׿]/.test(rest)) out.name=rest;
+  }
+  return out;
+}
+function readTextFile(f){
+  return new Promise(res=>{
+    const r=new FileReader();
+    r.onload=()=>res(String(r.result||''));
+    r.onerror=()=>res('');
+    r.readAsText(f);
+  });
+}
+
+let BIMP=[];
+function openBulkImport(){
+  BIMP=[];
+  showModal(`<h2>📁 ייבוא תיקי חקירה <button class="x" onclick="closeModal()">×</button></h2>
+    <div class="alert alert-info">בחר את התיקיה שמכילה את התיקים. כל תת-תיקיה תיפתח כפניה מסוג <b>חשד לגניבת מים</b>, עם התמונות שבה וקובץ המיקום שבתוכה. שום דבר לא נוצר עד שתאשר.</div>
+    <label class="btn btn-primary btn-block" style="padding:14px">📂 בחירת תיקיה
+      <input type="file" webkitdirectory directory multiple hidden onchange="bulkScan(event)"></label>
+    <div class="hint" style="margin-top:6px">הדפדפן יבקש אישור לקריאת התיקיה. הקבצים נקראים במחשב שלך; רק מה שתאשר נשלח לשרת.</div>
+    <div id="bi_body"></div>`);
+}
+
+async function bulkScan(ev){
+  const files=[...ev.target.files];
+  ev.target.value='';
+  if(!files.length) return;
+  const body=$('#bi_body');
+  if(body) body.innerHTML='<div class="hint" style="margin-top:14px">קורא את התיקיות…</div>';
+
+  /* קיבוץ לפי תת-תיקיה. אם נבחרה תיקיה שמכילה קבצים ישירות,
+     היא עצמה נחשבת תיק אחד. */
+  const groups={};
+  let nested=false;
+  for(const f of files) if((f.webkitRelativePath||'').split('/').length>2) nested=true;
+  for(const f of files){
+    const parts=(f.webkitRelativePath||f.name).split('/');
+    const folder=nested?(parts.length>2?parts[1]:null):(parts[0]||'תיק');
+    if(!folder) continue;
+    const g=(groups[folder]||(groups[folder]={photos:[],locs:[]}));
+    const nm=f.name.toLowerCase();
+    if(/\.(jpe?g|png|webp)$/.test(nm)) g.photos.push(f);
+    else if(/\.(url|txt|html?)$/.test(nm)) g.locs.push(f);
+    /* Thumbs.db, desktop.ini וכל השאר — מתעלמים */
+  }
+
+  const names=Object.keys(groups).sort((a,b)=>a.localeCompare(b,'he',{numeric:true}));
+  BIMP=[];
+  for(const folder of names){
+    const g=groups[folder];
+    let loc=null;
+    for(const lf of g.locs){
+      const p=parseLocationText(await readTextFile(lf));
+      if(p&&p.lat!=null){ loc=p; break; }
+    }
+    const noteParts=g.photos.map(f=>meaningfulName(f.name)).filter(Boolean);
+    const note=noteParts.join(' · ');
+    const holder=parseHolderFromText(note);
+    const near=loc?nearestCity(loc.lat,loc.lng):null;
+    BIMP.push({
+      folder, photos:g.photos, loc, note,
+      holderName:holder.name, holderId:holder.id,
+      city:near?near.city:CITIES[0], km:near?near.km:null,
+      include:true, dup:null, exists:false, result:null
+    });
+  }
+  /* נקודות זהות או סמוכות מאוד — כנראה אותו חיבור פעמיים */
+  for(let i=0;i<BIMP.length;i++) for(let j=i+1;j<BIMP.length;j++){
+    const a=BIMP[i], b=BIMP[j];
+    if(!a.loc||!b.loc) continue;
+    if(kmBetween(a.loc.lat,a.loc.lng,b.loc.lat,b.loc.lng)*1000<25){
+      a.dup=a.dup||b.folder; b.dup=b.dup||a.folder;
+    }
+  }
+  /* תיקים שכבר יובאו בעבר — מסומנים ולא נבחרים */
+  for(const r of BIMP){
+    r.exists=DB.tickets.some(t=>isTheft(t)&&(t.description||'').includes('ייבוא מתיקיה: '+r.folder+' '));
+    if(r.exists) r.include=false;
+  }
+  bulkRender();
+}
+
+let BI_A='', BI_B='';
+function bulkRender(){
+  const body=$('#bi_body');
+  if(!body) return;
+  /* שומרים את הבחירות לפני בנייה מחדש, אחרת הן מתאפסות בכל סימון */
+  if($('#bi_assign')) BI_A=$('#bi_assign').value;
+  if($('#bi_parallel')) BI_B=$('#bi_parallel').value;
+  if(!BIMP.length){ body.innerHTML='<div class="alert alert-err" style="margin-top:14px">לא נמצאו תיקיות עם תמונות.</div>'; return; }
+  const chosen=BIMP.filter(r=>r.include);
+  const noLoc=BIMP.filter(r=>r.include&&!r.loc).length;
+  const assignable=activeUsers().filter(w=>w.role==='investigator'||w.role==='super')
+    .sort((a,b)=>a.name.localeCompare(b.name,'he'));
+  body.innerHTML=`
+    <div class="section-t" style="margin-top:18px">נמצאו ${BIMP.length} תיקים</div>
+    ${!assignable.length?'<div class="alert alert-err">אין חוקר פעיל במערכת. צור משתמש בתפקיד "חוקר" לפני הייבוא.</div>':''}
+    <div class="field"><label class="req">גורם מטפל לכל התיקים</label>
+      <select id="bi_assign" onchange="bulkRender()">${assignable.map(w=>`<option value="${w.id}"${w.id===BI_A?' selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select></div>
+    <div class="field"><label>גורם מקביל — אותם תיקים ייפתחו גם אצלו</label>
+      <select id="bi_parallel" onchange="bulkRender()">
+        <option value="">ללא — גורם מטפל אחד</option>
+        ${assignable.map(w=>`<option value="${w.id}"${w.id===BI_B?' selected':''}>${esc(w.name)} — ${ROLES[w.role]}</option>`).join('')}</select>
+      <div class="hint" style="margin-top:4px">כל חוקר מקבל כרטיס משלו, ממלא טופס משלו ומפיק דוח משלו. הכרטיסים מקושרים כאירוע אחד.</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <button type="button" class="btn btn-outline btn-sm" onclick="bulkAll(true)">סימון הכול</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="bulkAll(false)">ביטול הכול</button>
+      <select style="width:auto;padding:6px 10px;font-size:13px" onchange="bulkSetCity(this.value);this.selectedIndex=0">
+        <option value="">קביעת ישוב לכולם…</option>${CITIES.map(c=>`<option>${c}</option>`).join('')}</select>
+    </div>
+    ${noLoc?`<div class="alert alert-warn">${noLoc} תיקים ללא מיקום — ייובאו בלעדיו וניתן להשלים אותו בכרטיס.</div>`:''}
+    <div style="max-height:46vh;overflow:auto;border:1px solid var(--border);border-radius:8px">
+    <table class="rep" style="margin:0">
+      <tr><th style="width:34px"></th><th>תיקיה</th><th>תמונות</th><th>מיקום</th><th>ישוב</th><th>הערות</th></tr>
+      ${BIMP.map((r,i)=>`<tr style="${r.include?'':'opacity:.45'}">
+        <td><input type="checkbox" ${r.include?'checked':''} style="width:auto" onchange="BIMP[${i}].include=this.checked;bulkRender()"></td>
+        <td><b>${esc(r.folder)}</b></td>
+        <td>${r.photos.length}</td>
+        <td>${r.loc?`<span dir="ltr" style="font-size:12px">${r.loc.lat.toFixed(5)}, ${r.loc.lng.toFixed(5)}</span>`:'<span class="chip chip-late" style="font-size:10px">חסר</span>'}</td>
+        <td><select style="width:auto;padding:4px 8px;font-size:12.5px" onchange="BIMP[${i}].city=this.value">
+            ${CITIES.map(c=>`<option${c===r.city?' selected':''}>${c}</option>`).join('')}</select>
+          ${r.km!=null&&r.km>1.5?'<div class="hint" style="font-size:11px">רחוק ממרכז הישוב — כדאי לאמת</div>':''}</td>
+        <td style="font-size:12px">
+          ${r.exists?'<div><span class="chip chip-done" style="font-size:10px">כבר יובא</span></div>':''}
+          ${r.dup?`<div><span class="chip chip-late" style="font-size:10px">אותו מיקום כמו ${esc(r.dup)}</span></div>`:''}
+          ${r.holderId?`<div>ת.ז ${esc(r.holderId)}${r.holderName?' · '+esc(r.holderName):''}</div>`:''}
+          ${r.note&&!r.holderId?`<div>${esc(r.note)}</div>`:''}</td>
+      </tr>`).join('')}
+    </table></div>
+    ${BI_B&&BI_B===BI_A?'<div class="alert alert-err">הגורם המקביל חייב להיות שונה מהגורם המטפל.</div>':''}
+    <div id="bi_prog" class="hint" style="margin-top:10px"></div>
+    <button class="btn btn-primary btn-block" id="bi_btn" style="margin-top:10px;padding:14px"
+      ${!chosen.length||!assignable.length||(BI_B&&BI_B===BI_A)?'disabled':''}
+      onclick="doBulkImport()">פתיחת ${chosen.length*(BI_B?2:1)} פניות${BI_B?` — ${chosen.length} לכל חוקר`:''}</button>`;
+}
+function bulkAll(v){ BIMP.forEach(r=>{ if(!r.exists||!v) r.include=v; }); bulkRender(); }
+function bulkSetCity(c){ if(!c) return; BIMP.forEach(r=>r.city=c); bulkRender(); }
+
+async function doBulkImport(){
+  const assignee=($('#bi_assign')||{}).value;
+  const parallel=($('#bi_parallel')||{}).value||'';
+  if(!assignee){ toast('יש לבחור גורם מטפל'); return; }
+  if(parallel&&parallel===assignee){ toast('הגורם המקביל חייב להיות שונה'); return; }
+  const rows=BIMP.filter(r=>r.include);
+  if(!rows.length) return;
+  const btn=$('#bi_btn'), prog=$('#bi_prog');
+  btn.disabled=true;
+  let done=0, failed=0, linkFails=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    if(prog) prog.textContent=`מייבא ${i+1} מתוך ${rows.length} — ${r.folder}`;
+    btn.textContent=`מייבא… ${i+1}/${rows.length}`;
+    try{
+      const base={
+        domain:'G', type:THEFT, city:r.city, address:'',
+        description:['ייבוא מתיקיה: '+r.folder,r.note].filter(Boolean).join(' · ')+' ',
+        customerName:r.holderName, customerId:r.holderId,
+        gps:r.loc?{lat:r.loc.lat,lng:r.loc.lng,at:Date.now()}:null
+      };
+      const t=await createTicketCloud({...base, assignedTo:assignee});
+      /* דוחסים פעם אחת ומעלים לשני הכרטיסים — אותן תמונות מקור */
+      let urls=null;
+      if(r.photos.length){
+        urls=await new Promise(res=>compressImages(r.photos,res));
+        await uploadDataUrls(t.id,'inv_connection',urls);
+      }
+      await addHistory(t.id,'ייבוא תיק חקירה',
+        'נוצרה מתיקיה "'+r.folder+'"'+(r.loc?'':' — ללא מיקום')+(r.note?' · '+r.note:''));
+
+      let twin=null;
+      if(parallel){
+        twin=await createTicketCloud({...base, assignedTo:parallel});
+        if(urls) await uploadDataUrls(twin.id,'inv_connection',urls);
+        await addHistory(twin.id,'ייבוא תיק חקירה',
+          'נוצרה מתיקיה "'+r.folder+'" — חקירה מקבילה');
+        /* קישור הזוג. אם נכשל — הכרטיסים קיימים אך אינם אירוע אחד,
+           וחשוב לדעת זאת ולא לבלוע את השגיאה. */
+        let le=(await sb.rpc('link_tickets',{t1:t.id,t2:twin.id})).error;
+        if(le) le=(await sb.rpc('admin_link_tickets',{t1:t.id,t2:twin.id})).error;
+        if(le) linkFails.push(r.folder);
+      }
+      r.result={ok:true,number:t.number+(twin?' · '+twin.number:'')}; done++;
+    }catch(e){
+      r.result={ok:false,msg:(e&&e.message)||String(e)}; failed++;
+    }
+  }
+  if(linkFails.length) toast('שימו לב: '+linkFails.length+' זוגות לא קושרו כאירוע אחד');
+  await loadAll();
+  const okRows=BIMP.filter(r=>r.result&&r.result.ok);
+  const badRows=BIMP.filter(r=>r.result&&!r.result.ok);
+  showModal(`<h2>📁 סיכום הייבוא <button class="x" onclick="closeModal();render()">×</button></h2>
+    <div class="alert ${failed?'alert-warn':'alert-info'}">נפתחו ${done} פניות${failed?`, ${failed} נכשלו`:''}.</div>
+    ${okRows.length?`<div style="max-height:40vh;overflow:auto"><table class="rep" style="margin:0">
+      <tr><th>תיקיה</th><th>מספר הפניה</th></tr>
+      ${okRows.map(r=>`<tr><td>${esc(r.folder)}</td><td dir="ltr" style="text-align:right">${esc(r.result.number)}</td></tr>`).join('')}
+    </table></div>`:''}
+    ${badRows.length?`<div class="section-t" style="font-size:14px">שנכשלו</div>
+      <table class="rep" style="margin:0">
+      ${badRows.map(r=>`<tr><td>${esc(r.folder)}</td><td style="font-size:12px">${esc(r.result.msg)}</td></tr>`).join('')}
+      </table>
+      <div class="hint" style="margin-top:6px">אפשר להריץ את הייבוא שוב — תיקים שכבר נפתחו יסומנו "כבר יובא" ולא ייפתחו פעמיים.</div>`:''}
+    <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="closeModal();render()">סגירה</button>`);
 }
 
 /* --- פרטי החוקר: נשמרים פעם אחת וממולאים בכל דוח --- */
