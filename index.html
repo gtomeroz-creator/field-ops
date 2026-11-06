@@ -4166,8 +4166,9 @@ function openEditUser(id){
           <input id="eu_email" type="email" dir="ltr" style="text-align:left" value="${esc(w.email)}">
           <div class="hint">שינוי הכתובת מעדכן את פרטי הכניסה — העובד ייכנס מעתה עם הכתובת החדשה (הסיסמה נשארת).</div></div>
         <div class="field"><label>טלפון</label><input id="eu_phone" type="tel" dir="ltr" style="text-align:left" value="${esc(w.phone||'')}"></div>`}
-    ${w.role==='investigator'?`
+    ${w.role==='investigator'||w.role==='super'?`
       <div class="section-t" style="font-size:14px">פרטי החוקר — מופיעים אוטומטית בכל דוח חקירה</div>
+      ${w.role==='super'?'<div class="hint" style="margin-top:-6px;margin-bottom:8px">רלוונטי רק אם מנהל העל מופיע בעצמו כחוקר מבצע בתיק.</div>':''}
       <div class="field"><label>מספר רישיון חוקר פרטי</label>
         <input id="eu_lic" dir="ltr" style="text-align:left" value="${esc(w.invLicense||'')}"></div>
       <div class="field"><label>שם משרד החקירות</label>
